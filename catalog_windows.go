@@ -24,6 +24,7 @@ const (
 	idClear             = 107
 	idSelected          = 108
 	idVisible           = 109
+	idStartCode         = 111
 	wmContextMenu       = 0x7b
 	lvmGetNextItem      = 0x100c
 	lvmSubItemHitTest   = 0x1039
@@ -97,6 +98,7 @@ type update struct {
 	entry    song
 	index    int
 	result   string
+	code     string
 	complete bool
 	problems int
 }
@@ -104,6 +106,7 @@ type update struct {
 type catalogWindow struct {
 	list, status, files, folder, convert          uintptr
 	searchLabel, search, clear, selected, visible uintptr
+	codeLabel, startCode, codeHint                uintptr
 	shown                                         []int
 	totalTasks, scanProblems                      int
 	rows                                          []song
@@ -120,7 +123,7 @@ func makeControl(owner uintptr, class, caption string, style, id, instance uintp
 
 func (w *catalogWindow) layout(width, height int) {
 	width = max(width, 24)
-	height = max(height, 124)
+	height = max(height, 163)
 	moveWindow.Call(w.files, 12, 12, 130, 30, 1)
 	moveWindow.Call(w.folder, 150, 12, 160, 30, 1)
 	moveWindow.Call(w.selected, 318, 12, 160, 30, 1)
@@ -129,7 +132,10 @@ func (w *catalogWindow) layout(width, height int) {
 	moveWindow.Call(w.searchLabel, 12, 55, 250, 26, 1)
 	moveWindow.Call(w.search, 265, 50, uintptr(max(width-372, 0)), 30, 1)
 	moveWindow.Call(w.clear, uintptr(max(width-97, 265)), 50, 85, 30, 1)
-	moveWindow.Call(w.list, 12, 91, uintptr(width-24), uintptr(height-124), 1)
+	moveWindow.Call(w.codeLabel, 12, 94, 250, 26, 1)
+	moveWindow.Call(w.startCode, 265, 89, 140, 30, 1)
+	moveWindow.Call(w.codeHint, 416, 94, uintptr(max(width-428, 0)), 26, 1)
+	moveWindow.Call(w.list, 12, 130, uintptr(width-24), uintptr(height-163), 1)
 	moveWindow.Call(w.status, 12, uintptr(height-25), uintptr(width-24), 22, 1)
 }
 
@@ -142,6 +148,7 @@ func (w *catalogWindow) setBusy(busy bool) {
 	enableWindow.Call(w.folder, enabled(!busy))
 	enableWindow.Call(w.search, enabled(!busy))
 	enableWindow.Call(w.clear, enabled(!busy))
+	enableWindow.Call(w.startCode, enabled(!busy))
 	w.updateActions(busy)
 }
 
@@ -240,9 +247,21 @@ func (w *catalogWindow) load(paths []string, folder string) {
 	}()
 }
 
-func (w *catalogWindow) startConversion(owner uintptr, indices []int) {
+func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool) {
 	if len(indices) == 0 || w.updates != nil {
 		return
+	}
+	var codes []string
+	if flat {
+		var buffer [65]uint16
+		user32.NewProc("GetWindowTextW").Call(w.startCode, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+		var err error
+		codes, err = exportCodes(w.rows, indices, syscall.UTF16ToString(buffer[:]))
+		if err != nil {
+			message(owner, err.Error(), 0x30)
+			user32.NewProc("SetFocus").Call(w.startCode)
+			return
+		}
 	}
 	folder, err := selectFolder(owner, fmt.Sprintf("เลือกโฟลเดอร์สำหรับเก็บ NCN (%d เพลง)", len(indices)))
 	if err != nil {
@@ -258,12 +277,16 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int) {
 	w.success, w.failures = 0, 0
 	w.statusText("กำลังแปลงเพลง…")
 	type task struct {
-		index int
-		path  string
+		index      int
+		path, code string
 	}
 	jobs := make([]task, 0, len(indices))
-	for _, index := range indices {
-		jobs = append(jobs, task{index, w.rows[index].path})
+	for i, index := range indices {
+		job := task{index: index, path: w.rows[index].path}
+		if flat {
+			job.code = codes[i]
+		}
+		jobs = append(jobs, job)
 		w.rows[index].state = "รอแปลง"
 	}
 	w.refreshList()
@@ -272,10 +295,16 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int) {
 	go func() {
 		for _, job := range jobs {
 			result := ""
-			if err := convert(job.path, folder); err != nil {
+			var err error
+			if flat {
+				err = convertFlat(job.path, folder, job.code)
+			} else {
+				err = convert(job.path, folder)
+			}
+			if err != nil {
 				result = err.Error()
 			}
-			updates <- update{index: job.index, result: result}
+			updates <- update{index: job.index, result: result, code: job.code}
 		}
 		updates <- update{complete: true}
 	}()
@@ -318,7 +347,7 @@ func (w *catalogWindow) contextMenu(owner, coords uintptr) {
 	user32.NewProc("AppendMenuW").Call(menu, 0, idSelected, uintptr(unsafe.Pointer(wide(label))))
 	command, _, _ := user32.NewProc("TrackPopupMenu").Call(menu, 0x182, uintptr(location.X), uintptr(location.Y), 0, owner, 0)
 	if command == idSelected {
-		w.startConversion(owner, selected)
+		w.startConversion(owner, selected, true)
 	}
 }
 
@@ -342,6 +371,9 @@ func (w *catalogWindow) poll() {
 				w.rows[event.index].state = event.result
 				if event.result == "" {
 					w.rows[event.index].state = "แปลงแล้ว"
+					if event.code != "" {
+						w.rows[event.index].state += " (" + event.code + ")"
+					}
 					w.success++
 				} else {
 					w.failures++
@@ -416,11 +448,11 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			setWindowText.Call(ui.search, uintptr(unsafe.Pointer(wide(""))))
 			user32.NewProc("SetFocus").Call(ui.search)
 		case idSelected:
-			ui.startConversion(hwnd, ui.selection())
+			ui.startConversion(hwnd, ui.selection(), true)
 		case idVisible:
-			ui.startConversion(hwnd, ui.shown)
+			ui.startConversion(hwnd, ui.shown, true)
 		case idConvert:
-			ui.startConversion(hwnd, matchingSongs(ui.rows, ""))
+			ui.startConversion(hwnd, matchingSongs(ui.rows, ""), false)
 		}
 		return 0
 	case wmContextMenu:
@@ -494,16 +526,20 @@ func main() {
 	ui.searchLabel = makeControl(handle, "STATIC", "ค้นหาชื่อเพลง / ศิลปิน / เวอร์ชัน EMK", 0, 110, instance)
 	ui.search = makeControl(handle, "EDIT", "", 0x810080, idSearch, instance)
 	ui.clear = makeControl(handle, "BUTTON", "ล้างคำค้น", 0x10000, idClear, instance)
+	ui.codeLabel = makeControl(handle, "STATIC", "รหัสเริ่มต้น (ผลค้นหา / เพลงที่เลือก)", 0, 112, instance)
+	ui.startCode = makeControl(handle, "EDIT", "", 0x810080, idStartCode, instance)
+	ui.codeHint = makeControl(handle, "STATIC", "เว้นว่างเพื่อใช้รหัสเดิม หรือใส่ 0001 / A0001 เพื่อรันเลข", 0, 113, instance)
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
 	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
-		ui.searchLabel, ui.search, ui.clear, ui.list, ui.status}
+		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status}
 	for _, control := range widgets {
 		if control == 0 {
 			message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
 			return
 		}
 	}
+	sendMessage.Call(ui.startCode, 0xc5, 64, 0)
 	sendMessage.Call(ui.search, 0xc5, 1024, 0) // EM_SETLIMITTEXT
 
 	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(15), 0, 0, 0,
@@ -571,8 +607,8 @@ func main() {
 					sendMessage.Call(ui.search, 0xb1, 0, ^uintptr(0)) // EM_SETSEL
 					continue
 				case 'A':
-					if msg.Window == ui.search {
-						sendMessage.Call(ui.search, 0xb1, 0, ^uintptr(0))
+					if msg.Window == ui.search || msg.Window == ui.startCode {
+						sendMessage.Call(msg.Window, 0xb1, 0, ^uintptr(0))
 						continue
 					}
 					if msg.Window == ui.list {

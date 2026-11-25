@@ -11,7 +11,7 @@ import (
 )
 
 type song struct {
-	path, title, artist, version, state string
+	path, title, artist, version, code, state string
 }
 
 func decodeText(data []byte) string {
@@ -45,6 +45,7 @@ func songInfo(path string) (song, error) {
 		return entry, err
 	}
 	info := settings(parts["SONG_INFO"])
+	entry.code = info["CODE"]
 	if version := settings(parts["HEADER"])["VERSION"]; version != "" {
 		entry.version = version
 	}
@@ -98,7 +99,7 @@ func matchesSong(entry song, terms []string) bool {
 		return true
 	}
 	fields := strings.ToLower(strings.Join([]string{
-		entry.title, entry.artist, entry.version, "EMK v" + entry.version,
+		entry.title, entry.artist, entry.version, "EMK v" + entry.version, entry.code,
 	}, "\n"))
 	for _, term := range terms {
 		if !strings.Contains(fields, term) {

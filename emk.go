@@ -174,13 +174,17 @@ func restoreMIDIHeader(midi []byte) error {
 	return nil
 }
 
-func convert(source, destination string) error {
+func readSongParts(source string) (map[string][]byte, error) {
 	file, err := os.Open(source)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	parts, err := unpack(file)
-	file.Close()
+	defer file.Close()
+	return unpack(file)
+}
+
+func convert(source, destination string) error {
+	parts, err := readSongParts(source)
 	if err != nil {
 		return err
 	}
@@ -202,14 +206,9 @@ func convert(source, destination string) error {
 		}
 		folder = filepath.Join(destination, fmt.Sprintf("%s (%d)", stem, index))
 	}
-	for ext, data := range parts {
-		if err := os.WriteFile(filepath.Join(folder, stem+ext), data, 0644); err != nil {
-			for writtenExt := range parts {
-				os.Remove(filepath.Join(folder, stem+writtenExt))
-			}
-			os.Remove(folder)
-			return err
-		}
+	if err := writeNCNSet(folder, stem, parts); err != nil {
+		os.Remove(folder)
+		return err
 	}
 	return nil
 }
