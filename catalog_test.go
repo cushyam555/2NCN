@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,26 +56,5 @@ func TestMatchingSongs(t *testing.T) {
 		if got := matchingSongs(rows, test.query); !reflect.DeepEqual(got, test.want) {
 			t.Errorf("matchingSongs(%q) = %v, want %v", test.query, got, test.want)
 		}
-	}
-}
-
-func TestUnsupportedXSTM(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(root, "sample.emk")
-	data := make([]byte, 64)
-	copy(data, "XSTM")
-	data[4] = 1
-	if err := os.WriteFile(source, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	entry, err := songInfo(source)
-	if entry.title != "sample" || entry.version != "XSTM" || !errors.Is(err, errUnsupportedXSTM) {
-		t.Fatalf("songInfo = %+v, %v", entry, err)
-	}
-	if err := convert(source, root); !errors.Is(err, errUnsupportedXSTM) {
-		t.Fatalf("convert returned %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "sample")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unexpected output folder: %v", err)
 	}
 }

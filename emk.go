@@ -14,8 +14,6 @@ import (
 
 const maxSize = 32 << 20
 
-var errUnsupportedXSTM = errors.New("ยังไม่รองรับ XSTM")
-
 var key = [...]byte{0xaf, 0xf2, 0x4c, 0x9c, 0xe9, 0xea, 0x99, 0x43}
 
 var extensions = map[string]string{
@@ -69,7 +67,7 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 		return nil, errors.New("ขนาดไฟล์ EMK อยู่นอกช่วงที่รองรับ")
 	}
 	if bytes.HasPrefix(data, []byte("XSTM")) {
-		return nil, errUnsupportedXSTM
+		return readXSTM(data, metadataOnly)
 	}
 	if string(data[:5]) != ".SFDS" {
 		for i := range data {
