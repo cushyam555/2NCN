@@ -4,7 +4,7 @@
 
 ## วิธีใช้งาน
 
-1. ดาวน์โหลด `2NCN-Windows-x64.exe` จาก [GitHub Releases](https://github.com/cushyam555/2NCN/releases/latest)
+1. ดาวน์โหลด [2NCN-Windows-x64.exe](https://github.com/cushyam555/2NCN/raw/refs/heads/main/downloads/2NCN-Windows-x64.exe)
 2. เปิดไฟล์โปรแกรม แล้วเลือกเพลง .emk หนึ่งไฟล์หรือหลายไฟล์
 3. เลือกโฟลเดอร์ปลายทาง โปรแกรมจะสร้างโฟลเดอร์ย่อยสำหรับแต่ละเพลง
 
