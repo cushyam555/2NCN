@@ -11,19 +11,28 @@ import (
 )
 
 const (
-	wmDestroy        = 2
-	wmSize           = 5
-	wmNotify         = 0x4e
-	wmCommand        = 0x111
-	wmTimer          = 0x113
-	wmSetFont        = 0x30
-	idFiles          = 101
-	idFolder         = 102
-	idConvert        = 103
-	lvmSetItemCount  = 0x102f
-	lvmInsertColumnW = 0x1061
-	lvmRedrawItems   = 0x1015
-	lvnGetDispInfoW  = ^uint32(176) // -177
+	wmDestroy           = 2
+	wmSize              = 5
+	wmNotify            = 0x4e
+	wmCommand           = 0x111
+	wmTimer             = 0x113
+	wmSetFont           = 0x30
+	idFiles             = 101
+	idFolder            = 102
+	idConvert           = 103
+	idSearch            = 106
+	idClear             = 107
+	idSelected          = 108
+	idVisible           = 109
+	wmContextMenu       = 0x7b
+	lvmGetNextItem      = 0x100c
+	lvmSubItemHitTest   = 0x1039
+	lvmGetSelectedCount = 0x1032
+	lvmSetItemState     = 0x102b
+	lvisSelected        = 2
+	lvmSetItemCount     = 0x102f
+	lvmInsertColumnW    = 0x1061
+	lvnGetDispInfoW     = ^uint32(176) // -177
 )
 
 var (
@@ -70,14 +79,18 @@ type notifyHeader struct {
 	Code       uint32
 }
 
-type displayInfo struct {
-	Header           notifyHeader
+type listItem struct {
 	Mask             uint32
 	Item, SubItem    int32
 	State, StateMask uint32
 	Text             *uint16
 	TextMax, Image   int32
 	Param            uintptr
+}
+
+type displayInfo struct {
+	Header notifyHeader
+	listItem
 }
 
 type update struct {
@@ -89,11 +102,14 @@ type update struct {
 }
 
 type catalogWindow struct {
-	list, status, files, folder, convert uintptr
-	rows                                 []song
-	updates                              <-chan update
-	converting                           bool
-	success, failures                    int
+	list, status, files, folder, convert          uintptr
+	searchLabel, search, clear, selected, visible uintptr
+	shown                                         []int
+	totalTasks, scanProblems                      int
+	rows                                          []song
+	updates                                       <-chan update
+	converting                                    bool
+	success, failures                             int
 }
 
 func makeControl(owner uintptr, class, caption string, style, id, instance uintptr) uintptr {
@@ -104,11 +120,16 @@ func makeControl(owner uintptr, class, caption string, style, id, instance uintp
 
 func (w *catalogWindow) layout(width, height int) {
 	width = max(width, 24)
-	height = max(height, 85)
+	height = max(height, 124)
 	moveWindow.Call(w.files, 12, 12, 130, 30, 1)
 	moveWindow.Call(w.folder, 150, 12, 160, 30, 1)
-	moveWindow.Call(w.convert, 318, 12, 160, 30, 1)
-	moveWindow.Call(w.list, 12, 52, uintptr(width-24), uintptr(height-85), 1)
+	moveWindow.Call(w.selected, 318, 12, 160, 30, 1)
+	moveWindow.Call(w.visible, 486, 12, 170, 30, 1)
+	moveWindow.Call(w.convert, 664, 12, 170, 30, 1)
+	moveWindow.Call(w.searchLabel, 12, 55, 250, 26, 1)
+	moveWindow.Call(w.search, 265, 50, uintptr(max(width-372, 0)), 30, 1)
+	moveWindow.Call(w.clear, uintptr(max(width-97, 265)), 50, 85, 30, 1)
+	moveWindow.Call(w.list, 12, 91, uintptr(width-24), uintptr(height-124), 1)
 	moveWindow.Call(w.status, 12, uintptr(height-25), uintptr(width-24), 22, 1)
 }
 
@@ -117,20 +138,81 @@ func (w *catalogWindow) statusText(text string) {
 }
 
 func (w *catalogWindow) setBusy(busy bool) {
-	var sourceEnabled, convertEnabled uintptr
-	if !busy {
-		sourceEnabled = 1
-		if len(w.rows) > 0 {
-			convertEnabled = 1
-		}
+	enableWindow.Call(w.files, enabled(!busy))
+	enableWindow.Call(w.folder, enabled(!busy))
+	enableWindow.Call(w.search, enabled(!busy))
+	enableWindow.Call(w.clear, enabled(!busy))
+	w.updateActions(busy)
+}
+
+func enabled(value bool) uintptr {
+	if value {
+		return 1
 	}
-	enableWindow.Call(w.files, sourceEnabled)
-	enableWindow.Call(w.folder, sourceEnabled)
-	enableWindow.Call(w.convert, convertEnabled)
+	return 0
+}
+
+func (w *catalogWindow) updateActions(busy bool) {
+	selected, _, _ := sendMessage.Call(w.list, lvmGetSelectedCount, 0, 0)
+	enableWindow.Call(w.selected, enabled(!busy && selected != 0))
+	enableWindow.Call(w.visible, enabled(!busy && len(w.shown) != 0))
+	enableWindow.Call(w.convert, enabled(!busy && len(w.rows) != 0))
+}
+
+func (w *catalogWindow) selection() []int {
+	var rows []int
+	index := ^uintptr(0)
+	for {
+		index, _, _ = sendMessage.Call(w.list, lvmGetNextItem, index, lvisSelected)
+		if int32(index) < 0 || index >= uintptr(len(w.shown)) {
+			return rows
+		}
+		rows = append(rows, w.shown[index])
+	}
+}
+
+func (w *catalogWindow) setSelected(index uintptr, selected bool) {
+	item := listItem{StateMask: lvisSelected}
+	if selected {
+		item.State = lvisSelected
+	}
+	sendMessage.Call(w.list, lvmSetItemState, index, uintptr(unsafe.Pointer(&item)))
+	runtime.KeepAlive(item)
+}
+
+func (w *catalogWindow) applySearch() {
+	var buffer [1025]uint16
+	user32.NewProc("GetWindowTextW").Call(w.search, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	w.setSelected(^uintptr(0), false)
+	w.shown = matchingSongs(w.rows, syscall.UTF16ToString(buffer[:]))
+	sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 0)
+	if len(w.shown) > 0 {
+		sendMessage.Call(w.list, 0x1013, 0, 0) // LVM_ENSUREVISIBLE
+	}
+	w.refreshList()
+	w.updateActions(false)
+	w.catalogStatus(false)
+}
+
+func (w *catalogWindow) refreshList() {
+	user32.NewProc("InvalidateRect").Call(w.list, 0, 0)
+}
+
+func (w *catalogWindow) catalogStatus(scanning bool) {
+	text := fmt.Sprintf("แสดง %d จาก %d เพลง", len(w.shown), len(w.rows))
+	if scanning {
+		text += "  |  กำลังอ่านรายการ…"
+	} else if w.scanProblems > 0 {
+		text += fmt.Sprintf("  |  อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ", w.scanProblems)
+	}
+	w.statusText(text)
 }
 
 func (w *catalogWindow) load(paths []string, folder string) {
 	w.rows = nil
+	w.shown = nil
+	w.scanProblems = 0
+	setWindowText.Call(w.search, uintptr(unsafe.Pointer(wide(""))))
 	w.success, w.failures = 0, 0
 	sendMessage.Call(w.list, lvmSetItemCount, 0, 0)
 	w.setBusy(true)
@@ -158,29 +240,86 @@ func (w *catalogWindow) load(paths []string, folder string) {
 	}()
 }
 
-func (w *catalogWindow) convertAll(destination string) {
+func (w *catalogWindow) startConversion(owner uintptr, indices []int) {
+	if len(indices) == 0 || w.updates != nil {
+		return
+	}
+	folder, err := selectFolder(owner, fmt.Sprintf("เลือกโฟลเดอร์สำหรับเก็บ NCN (%d เพลง)", len(indices)))
+	if err != nil {
+		message(owner, err.Error(), 0x10)
+		return
+	}
+	if folder == "" {
+		return
+	}
 	w.setBusy(true)
 	w.converting = true
+	w.totalTasks = len(indices)
 	w.success, w.failures = 0, 0
 	w.statusText("กำลังแปลงเพลง…")
-	paths := make([]string, len(w.rows))
-	for i, entry := range w.rows {
-		paths[i] = entry.path
-		w.rows[i].state = ""
+	type task struct {
+		index int
+		path  string
 	}
-	sendMessage.Call(w.list, lvmRedrawItems, 0, uintptr(len(paths)-1))
+	jobs := make([]task, 0, len(indices))
+	for _, index := range indices {
+		jobs = append(jobs, task{index, w.rows[index].path})
+		w.rows[index].state = "รอแปลง"
+	}
+	w.refreshList()
 	updates := make(chan update, 256)
 	w.updates = updates
 	go func() {
-		for i, path := range paths {
+		for _, job := range jobs {
 			result := ""
-			if err := convert(path, destination); err != nil {
+			if err := convert(job.path, folder); err != nil {
 				result = err.Error()
 			}
-			updates <- update{index: i, result: result}
+			updates <- update{index: job.index, result: result}
 		}
 		updates <- update{complete: true}
 	}()
+}
+
+func (w *catalogWindow) contextMenu(owner, coords uintptr) {
+	if w.updates != nil || len(w.shown) == 0 {
+		return
+	}
+	location := point{int32(int16(coords)), int32(int16(coords >> 16))}
+	if uint32(coords) == ^uint32(0) {
+		user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&location)))
+	} else {
+		hit := struct {
+			Point                point
+			Flags                uint32
+			Item, SubItem, Group int32
+		}{Point: location}
+		user32.NewProc("ScreenToClient").Call(w.list, uintptr(unsafe.Pointer(&hit.Point)))
+		index, _, _ := sendMessage.Call(w.list, lvmSubItemHitTest, 0, uintptr(unsafe.Pointer(&hit)))
+		if int32(index) < 0 || hit.Flags&0x0e == 0 {
+			return
+		}
+		state, _, _ := sendMessage.Call(w.list, 0x102c, index, lvisSelected) // LVM_GETITEMSTATE
+		if state&lvisSelected == 0 {
+			w.setSelected(^uintptr(0), false)
+			w.setSelected(index, true)
+		}
+	}
+	selected := w.selection()
+	if len(selected) == 0 {
+		return
+	}
+	menu, _, _ := user32.NewProc("CreatePopupMenu").Call()
+	if menu == 0 {
+		return
+	}
+	defer user32.NewProc("DestroyMenu").Call(menu)
+	label := fmt.Sprintf("แปลงเฉพาะเพลงที่เลือก (%d เพลง)", len(selected))
+	user32.NewProc("AppendMenuW").Call(menu, 0, idSelected, uintptr(unsafe.Pointer(wide(label))))
+	command, _, _ := user32.NewProc("TrackPopupMenu").Call(menu, 0x182, uintptr(location.X), uintptr(location.Y), 0, owner, 0)
+	if command == idSelected {
+		w.startConversion(owner, selected)
+	}
 }
 
 func (w *catalogWindow) poll() {
@@ -188,7 +327,7 @@ func (w *catalogWindow) poll() {
 		return
 	}
 	oldCount := len(w.rows)
-	first, last := -1, -1
+	changed := false
 	done, problems := false, 0
 	for range 256 {
 		select {
@@ -199,10 +338,7 @@ func (w *catalogWindow) poll() {
 				break
 			}
 			if w.converting {
-				if first < 0 {
-					first = event.index
-				}
-				last = event.index
+				changed = true
 				w.rows[event.index].state = event.result
 				if event.result == "" {
 					w.rows[event.index].state = "แปลงแล้ว"
@@ -211,6 +347,7 @@ func (w *catalogWindow) poll() {
 					w.failures++
 				}
 			} else {
+				w.shown = append(w.shown, len(w.rows))
 				w.rows = append(w.rows, event.entry)
 			}
 		default:
@@ -222,24 +359,21 @@ func (w *catalogWindow) poll() {
 	}
 refreshed:
 	if len(w.rows) != oldCount {
-		sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.rows)), 2)
+		sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 2)
 	}
-	if first >= 0 {
-		sendMessage.Call(w.list, lvmRedrawItems, uintptr(first), uintptr(last))
+	if changed {
+		w.refreshList()
 	}
 	if w.converting {
-		if first >= 0 || done {
+		if changed || done {
 			w.statusText(fmt.Sprintf("แปลงสำเร็จ %d จาก %d เพลง   |   มีข้อผิดพลาด %d",
-				w.success, len(w.rows), w.failures))
+				w.success, w.totalTasks, w.failures))
 		}
 	} else if len(w.rows) != oldCount || done {
-		text := fmt.Sprintf("พบ %d เพลง", len(w.rows))
-		if !done {
-			text += "  |  กำลังอ่านรายการ…"
-		} else if problems > 0 {
-			text += fmt.Sprintf("  |  อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ", problems)
+		if done {
+			w.scanProblems = problems
 		}
-		w.statusText(text)
+		w.catalogStatus(!done)
 	}
 	if done {
 		w.converting = false
@@ -274,24 +408,37 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			} else if folder != "" {
 				ui.load(nil, folder)
 			}
+		case idSearch:
+			if uint16(wParam>>16) == 0x300 && ui.search != 0 { // EN_CHANGE
+				ui.applySearch()
+			}
+		case idClear:
+			setWindowText.Call(ui.search, uintptr(unsafe.Pointer(wide(""))))
+			user32.NewProc("SetFocus").Call(ui.search)
+		case idSelected:
+			ui.startConversion(hwnd, ui.selection())
+		case idVisible:
+			ui.startConversion(hwnd, ui.shown)
 		case idConvert:
-			if len(ui.rows) == 0 {
-				return 0
-			}
-			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์สำหรับเก็บชุดไฟล์ NCN")
-			if err != nil {
-				message(hwnd, err.Error(), 0x10)
-			} else if folder != "" {
-				ui.convertAll(folder)
-			}
+			ui.startConversion(hwnd, matchingSongs(ui.rows, ""))
 		}
 		return 0
+	case wmContextMenu:
+		if wParam == ui.list {
+			ui.contextMenu(hwnd, lParam)
+			return 0
+		}
 	case wmNotify:
 		if lParam != 0 {
 			header := (*notifyHeader)(unsafe.Pointer(lParam))
-			if header.Window == ui.list && header.Code == lvnGetDispInfoW {
-				provideListText((*displayInfo)(unsafe.Pointer(lParam)))
-				return 0
+			if header.Window == ui.list {
+				switch header.Code {
+				case lvnGetDispInfoW:
+					provideListText((*displayInfo)(unsafe.Pointer(lParam)))
+					return 0
+				case ^uint32(100), ^uint32(114): // LVN_ITEMCHANGED, LVN_ODSTATECHANGED
+					ui.updateActions(ui.updates != nil)
+				}
 			}
 		}
 	case wmDestroy:
@@ -304,11 +451,11 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 func provideListText(info *displayInfo) {
 	index, column := int(info.Item), int(info.SubItem)
-	if info.Mask&1 == 0 || index < 0 || index >= len(ui.rows) || column < 0 || column >= 5 ||
+	if info.Mask&1 == 0 || index < 0 || index >= len(ui.shown) || column < 0 || column >= 5 ||
 		info.Text == nil || info.TextMax <= 0 {
 		return
 	}
-	entry := ui.rows[index]
+	entry := ui.rows[ui.shown[index]]
 	columns := [5]string{entry.title, entry.artist, entry.version, entry.path, entry.state}
 	value, _ := syscall.UTF16FromString(strings.ReplaceAll(columns[column], "\x00", "�"))
 	buffer := unsafe.Slice(info.Text, int(info.TextMax))
@@ -341,13 +488,24 @@ func main() {
 	}
 	ui.files = makeControl(handle, "BUTTON", "เลือกไฟล์ EMK", 0x10000, idFiles, instance)
 	ui.folder = makeControl(handle, "BUTTON", "สแกนโฟลเดอร์", 0x10000, idFolder, instance)
-	ui.convert = makeControl(handle, "BUTTON", "แปลงทั้งหมดเป็น NCN", 0x10000, idConvert, instance)
+	ui.selected = makeControl(handle, "BUTTON", "แปลงที่เลือก", 0x10000, idSelected, instance)
+	ui.visible = makeControl(handle, "BUTTON", "แปลงผลค้นหา", 0x10000, idVisible, instance)
+	ui.convert = makeControl(handle, "BUTTON", "แปลงทั้งคลัง", 0x10000, idConvert, instance)
+	ui.searchLabel = makeControl(handle, "STATIC", "ค้นหาชื่อเพลง / ศิลปิน / เวอร์ชัน EMK", 0, 110, instance)
+	ui.search = makeControl(handle, "EDIT", "", 0x810080, idSearch, instance)
+	ui.clear = makeControl(handle, "BUTTON", "ล้างคำค้น", 0x10000, idClear, instance)
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
-	if ui.files == 0 || ui.folder == 0 || ui.convert == 0 || ui.list == 0 || ui.status == 0 {
-		message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
-		return
+	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
+		ui.searchLabel, ui.search, ui.clear, ui.list, ui.status}
+	for _, control := range widgets {
+		if control == 0 {
+			message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
+			return
+		}
 	}
+	sendMessage.Call(ui.search, 0xc5, 1024, 0) // EM_SETLIMITTEXT
+
 	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(15), 0, 0, 0,
 		400, 0, 0, 0, 1, 0, 0, 0, 0, uintptr(unsafe.Pointer(wide("Leelawadee UI"))))
 	if font == 0 {
@@ -355,7 +513,7 @@ func main() {
 	} else {
 		defer gdi32.NewProc("DeleteObject").Call(font)
 	}
-	for _, control := range []uintptr{ui.files, ui.folder, ui.convert, ui.list, ui.status} {
+	for _, control := range widgets {
 		sendMessage.Call(control, wmSetFont, font, 1)
 	}
 	sendMessage.Call(ui.list, 0x2005, 1, 0)       // CCM_SETUNICODEFORMAT
@@ -396,11 +554,34 @@ func main() {
 	getMessage := user32.NewProc("GetMessageW")
 	translate := user32.NewProc("TranslateMessage")
 	dispatch := user32.NewProc("DispatchMessageW")
+	getKeyState := user32.NewProc("GetKeyState")
+	setFocus := user32.NewProc("SetFocus")
 	var msg winMessage
 	for {
 		result, _, _ := getMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 		if int32(result) <= 0 {
 			break
+		}
+		if msg.ID == 0x100 && ui.updates == nil { // WM_KEYDOWN
+			modifier, _, _ := getKeyState.Call(0x11) // VK_CONTROL
+			if modifier&0x8000 != 0 {
+				switch msg.WParam {
+				case 'F':
+					setFocus.Call(ui.search)
+					sendMessage.Call(ui.search, 0xb1, 0, ^uintptr(0)) // EM_SETSEL
+					continue
+				case 'A':
+					if msg.Window == ui.search {
+						sendMessage.Call(ui.search, 0xb1, 0, ^uintptr(0))
+						continue
+					}
+					if msg.Window == ui.list {
+						ui.setSelected(^uintptr(0), true)
+						ui.updateActions(false)
+						continue
+					}
+				}
+			}
 		}
 		translate.Call(uintptr(unsafe.Pointer(&msg)))
 		dispatch.Call(uintptr(unsafe.Pointer(&msg)))

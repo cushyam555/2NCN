@@ -34,3 +34,27 @@ func TestScanSongsNested(t *testing.T) {
 		t.Fatalf("paths = %v, want %v", got, want)
 	}
 }
+
+func TestMatchingSongs(t *testing.T) {
+	rows := []song{
+		{title: "คนแบกรัก", artist: "แจ็ค ธนพล", version: "2"},
+		{title: "Move On", artist: "Artist", version: "3.1"},
+		{title: "อีกครั้ง", artist: "ARTIST", version: "ไม่ระบุ"},
+	}
+	tests := []struct {
+		query string
+		want  []int
+	}{
+		{"", []int{0, 1, 2}},
+		{"แบกรัก แจ็ค v2", []int{0}},
+		{"  ARTIST  ", []int{1, 2}},
+		{"move 3.1", []int{1}},
+		{"ไม่ระบุ", []int{2}},
+		{"ไม่มีเพลงนี้", []int{}},
+	}
+	for _, test := range tests {
+		if got := matchingSongs(rows, test.query); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("matchingSongs(%q) = %v, want %v", test.query, got, test.want)
+		}
+	}
+}

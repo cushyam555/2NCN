@@ -73,3 +73,30 @@ func scanSongs(folder string, visit func(string), failed func(string, error)) {
 		return nil
 	})
 }
+
+// Each search term can match a different field.
+func matchingSongs(rows []song, query string) []int {
+	terms := strings.Fields(strings.ToLower(query))
+	matches := make([]int, 0, len(rows))
+	for i, entry := range rows {
+		if matchesSong(entry, terms) {
+			matches = append(matches, i)
+		}
+	}
+	return matches
+}
+
+func matchesSong(entry song, terms []string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+	fields := strings.ToLower(strings.Join([]string{
+		entry.title, entry.artist, entry.version, "EMK v" + entry.version,
+	}, "\n"))
+	for _, term := range terms {
+		if !strings.Contains(fields, term) {
+			return false
+		}
+	}
+	return true
+}
