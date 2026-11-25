@@ -348,7 +348,13 @@ func main() {
 		message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
 		return
 	}
-	font, _, _ := gdi32.NewProc("GetStockObject").Call(17)
+	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(15), 0, 0, 0,
+		400, 0, 0, 0, 1, 0, 0, 0, 0, uintptr(unsafe.Pointer(wide("Leelawadee UI"))))
+	if font == 0 {
+		font, _, _ = gdi32.NewProc("GetStockObject").Call(17)
+	} else {
+		defer gdi32.NewProc("DeleteObject").Call(font)
+	}
 	for _, control := range []uintptr{ui.files, ui.folder, ui.convert, ui.list, ui.status} {
 		sendMessage.Call(control, wmSetFont, font, 1)
 	}
