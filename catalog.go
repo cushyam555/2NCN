@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -42,6 +43,9 @@ func songInfo(path string) (song, error) {
 	defer file.Close()
 	parts, err := readParts(file, true)
 	if err != nil {
+		if errors.Is(err, errUnsupportedXSTM) {
+			entry.version = "XSTM"
+		}
 		return entry, err
 	}
 	info := settings(parts["SONG_INFO"])
