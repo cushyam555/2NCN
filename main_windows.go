@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -50,13 +49,13 @@ func wide(s string) *uint16 {
 	return p
 }
 
-func message(body string, icon uintptr) {
-	user32.NewProc("MessageBoxW").Call(0,
+func message(owner uintptr, body string, icon uintptr) {
+	user32.NewProc("MessageBoxW").Call(owner,
 		uintptr(unsafe.Pointer(wide(body))),
 		uintptr(unsafe.Pointer(wide("2NCN — EMK → NCN"))), icon)
 }
 
-func selectFiles() ([]string, error) {
+func selectFiles(owner uintptr) ([]string, error) {
 	const (
 		explorer         = 0x80000
 		allowMultiSelect = 0x200
@@ -66,7 +65,7 @@ func selectFiles() ([]string, error) {
 	buffer := make([]uint16, 65536)
 	filter := []uint16{'E', 'M', 'K', 0, '*', '.', 'e', 'm', 'k', 0, 0}
 	dialog := openFileName{
-		Filter: &filter[0], FilterIndex: 1, File: &buffer[0],
+		Owner: owner, Filter: &filter[0], FilterIndex: 1, File: &buffer[0],
 		MaxFile: uint32(len(buffer)), Title: wide("เลือกไฟล์ EMK"),
 		Flags: explorer | allowMultiSelect | fileMustExist | noChangeDir,
 	}
@@ -102,7 +101,7 @@ func selectFiles() ([]string, error) {
 	return paths, nil
 }
 
-func selectDestination() (string, error) {
+func selectFolder(owner uintptr, title string) (string, error) {
 	const (
 		apartmentThreaded = 2
 		returnFSDirs      = 1
@@ -116,7 +115,7 @@ func selectDestination() (string, error) {
 
 	var name [260]uint16
 	options := browseInfo{
-		DisplayName: &name[0], Title: wide("เลือกโฟลเดอร์สำหรับเก็บชุดไฟล์ NCN"),
+		Owner: owner, DisplayName: &name[0], Title: wide(title),
 		Flags: returnFSDirs | newDialogStyle,
 	}
 	folder, _, _ := shell32.NewProc("SHBrowseForFolderW").Call(uintptr(unsafe.Pointer(&options)))
@@ -131,47 +130,4 @@ func selectDestination() (string, error) {
 		return "", fmt.Errorf("ไม่สามารถอ่านที่อยู่โฟลเดอร์ปลายทาง")
 	}
 	return syscall.UTF16ToString(path[:]), nil
-}
-
-func main() {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	paths := os.Args[1:]
-	if len(paths) == 0 {
-		var err error
-		paths, err = selectFiles()
-		if err != nil {
-			message(err.Error(), 0x10)
-			return
-		}
-	}
-	if len(paths) == 0 {
-		return
-	}
-	destination, err := selectDestination()
-	if err != nil {
-		message(err.Error(), 0x10)
-		return
-	}
-	if destination == "" {
-		return
-	}
-
-	var failures []string
-	for _, path := range paths {
-		if err := convert(path, destination); err != nil {
-			failures = append(failures, fmt.Sprintf("%s — %v", filepath.Base(path), err))
-		}
-	}
-	summary := fmt.Sprintf("แปลงสำเร็จ %d จาก %d เพลง\n%s", len(paths)-len(failures), len(paths), destination)
-	if len(failures) == 0 {
-		message(summary, 0x40)
-		return
-	}
-	if len(failures) > 10 {
-		summary += "\n\n" + strings.Join(failures[:10], "\n") + fmt.Sprintf("\nและอีก %d ไฟล์", len(failures)-10)
-	} else {
-		summary += "\n\n" + strings.Join(failures, "\n")
-	}
-	message(summary, 0x30)
 }

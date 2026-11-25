@@ -55,6 +55,10 @@ func (d *directory) field() any {
 }
 
 func unpack(file io.Reader) (map[string][]byte, error) {
+	return readParts(file, false)
+}
+
+func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(file, maxSize+1))
 	if err != nil {
 		return nil, err
@@ -96,6 +100,15 @@ func unpack(file io.Reader) (map[string][]byte, error) {
 			return nil, fmt.Errorf("อ่านสารบัญ SFDS: %w", table.err)
 		}
 		extension := extensions[tag]
+		if metadataOnly {
+			switch tag {
+			case "HEADER", "SONG_INFO":
+				extension = tag
+			case "LYRIC_DATA":
+			default:
+				continue
+			}
+		}
 		if extension == "" {
 			continue
 		}
@@ -119,6 +132,9 @@ func unpack(file io.Reader) (map[string][]byte, error) {
 			return nil, fmt.Errorf("ขนาดข้อมูล %s ไม่ตรงกับสารบัญ", extension)
 		}
 		parts[extension] = payload
+	}
+	if metadataOnly {
+		return parts, nil
 	}
 	if len(parts) != 3 {
 		return nil, errors.New("ไฟล์ EMK มีข้อมูล MIDI เนื้อร้อง หรือจังหวะไม่ครบ")
