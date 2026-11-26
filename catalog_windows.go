@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -434,7 +433,7 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				ui.load(paths, "")
 			}
 		case idFolder:
-			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์เพลง EMK")
+			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์เพลง EMK / SMD")
 			if err != nil {
 				message(hwnd, err.Error(), 0x10)
 			} else if folder != "" {
@@ -512,18 +511,18 @@ func main() {
 		return
 	}
 	const defaultPosition = 0x80000000
-	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK"))),
+	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK / SMD"))),
 		0x00cf0000, defaultPosition, defaultPosition, 1100, 680, 0, 0, instance, 0)
 	if handle == 0 {
 		message(0, err.Error(), 0x10)
 		return
 	}
-	ui.files = makeControl(handle, "BUTTON", "เลือกไฟล์ EMK", 0x10000, idFiles, instance)
+	ui.files = makeControl(handle, "BUTTON", "เลือก EMK / SMD", 0x10000, idFiles, instance)
 	ui.folder = makeControl(handle, "BUTTON", "สแกนโฟลเดอร์", 0x10000, idFolder, instance)
 	ui.selected = makeControl(handle, "BUTTON", "แปลงที่เลือก", 0x10000, idSelected, instance)
 	ui.visible = makeControl(handle, "BUTTON", "แปลงผลค้นหา", 0x10000, idVisible, instance)
 	ui.convert = makeControl(handle, "BUTTON", "แปลงทั้งคลัง", 0x10000, idConvert, instance)
-	ui.searchLabel = makeControl(handle, "STATIC", "ค้นหาชื่อเพลง / ศิลปิน / เวอร์ชัน EMK", 0, 110, instance)
+	ui.searchLabel = makeControl(handle, "STATIC", "ค้นหาชื่อเพลง / ศิลปิน / เวอร์ชัน / รูปแบบ", 0, 110, instance)
 	ui.search = makeControl(handle, "EDIT", "", 0x810080, idSearch, instance)
 	ui.clear = makeControl(handle, "BUTTON", "ล้างคำค้น", 0x10000, idClear, instance)
 	ui.codeLabel = makeControl(handle, "STATIC", "รหัสเริ่มต้น (ผลค้นหา / เพลงที่เลือก)", 0, 112, instance)
@@ -554,14 +553,14 @@ func main() {
 	}
 	sendMessage.Call(ui.list, 0x2005, 1, 0)       // CCM_SETUNICODEFORMAT
 	sendMessage.Call(ui.list, 0x1036, 0, 0x10021) // double buffer, full-row selection, grid lines
-	labels := []string{"ชื่อเพลง", "ศิลปิน", "เวอร์ชัน EMK", "ไฟล์ต้นทาง", "สถานะ"}
+	labels := []string{"ชื่อเพลง", "ศิลปิน", "เวอร์ชัน / รูปแบบ", "ไฟล์ต้นทาง", "สถานะ"}
 	widths := []int32{245, 175, 105, 350, 160}
 	for i, label := range labels {
 		column := listColumn{Mask: 6, Width: widths[i], Text: wide(label)}
 		sendMessage.Call(ui.list, lvmInsertColumnW, uintptr(i), uintptr(unsafe.Pointer(&column)))
 		runtime.KeepAlive(column)
 	}
-	ui.statusText("เลือกไฟล์ EMK หรือสแกนโฟลเดอร์เพื่อดูรายการเพลง")
+	ui.statusText("เลือกไฟล์ EMK / SMD หรือสแกนโฟลเดอร์เพื่อดูรายการเพลง")
 	ui.setBusy(false)
 	var rect [4]int32
 	user32.NewProc("GetClientRect").Call(handle, uintptr(unsafe.Pointer(&rect[0])))
@@ -578,7 +577,7 @@ func main() {
 		} else {
 			filtered := make([]string, 0, len(os.Args)-1)
 			for _, path := range os.Args[1:] {
-				if strings.EqualFold(filepath.Ext(path), ".emk") {
+				if supportedSongPath(path) {
 					filtered = append(filtered, path)
 				}
 			}

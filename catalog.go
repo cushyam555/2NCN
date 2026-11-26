@@ -56,6 +56,9 @@ func songInfo(path string) (song, error) {
 			entry.version += " (XSTM)"
 		}
 	}
+	if string(parts["FORMAT"]) == "SMD" {
+		entry.version = "SMD"
+	}
 	entry.artist = info["ARTIST"]
 	lyrics := strings.Split(strings.ReplaceAll(decodeText(parts[".lyr"]), "\r\n", "\n"), "\n")
 	if title := info["TITLE"]; title != "" {
@@ -69,13 +72,22 @@ func songInfo(path string) (song, error) {
 	return entry, nil
 }
 
+func supportedSongPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".emk", ".smd":
+		return true
+	default:
+		return false
+	}
+}
+
 func scanSongs(folder string, visit func(string), failed func(string, error)) {
 	filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			failed(path, err)
 			return nil
 		}
-		if entry.Type().IsRegular() && strings.EqualFold(filepath.Ext(path), ".emk") {
+		if entry.Type().IsRegular() && supportedSongPath(path) {
 			visit(path)
 		}
 		return nil
@@ -98,8 +110,12 @@ func matchesSong(entry song, terms []string) bool {
 	if len(terms) == 0 {
 		return true
 	}
+	format := entry.version
+	if format != "SMD" {
+		format += "\nEMK v" + entry.version
+	}
 	fields := strings.ToLower(strings.Join([]string{
-		entry.title, entry.artist, entry.version, "EMK v" + entry.version, entry.code,
+		entry.title, entry.artist, format, entry.code,
 	}, "\n"))
 	for _, term := range terms {
 		if !strings.Contains(fields, term) {

@@ -64,7 +64,10 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 		return nil, err
 	}
 	if len(data) < 50 || len(data) > maxSize {
-		return nil, errors.New("ขนาดไฟล์ EMK อยู่นอกช่วงที่รองรับ")
+		return nil, errors.New("ขนาดไฟล์อยู่นอกช่วงที่รองรับ")
+	}
+	if bytes.HasPrefix(data, []byte(smdHeader)) {
+		return readSMD(data, metadataOnly)
 	}
 	if bytes.HasPrefix(data, []byte("XSTM")) {
 		return readXSTM(data, metadataOnly)
@@ -75,7 +78,7 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 		}
 	}
 	if string(data[:5]) != ".SFDS" {
-		return nil, errors.New("ไม่รู้จักหัวไฟล์ EMK (SFDS)")
+		return nil, errors.New("ไม่รู้จักรูปแบบไฟล์ EMK หรือ SMD")
 	}
 	start := binary.LittleEndian.Uint64(data[0x22:])
 	end := binary.LittleEndian.Uint64(data[0x2a:])
@@ -192,7 +195,7 @@ func convert(source, destination string) error {
 	name := filepath.Base(source)
 	stem := strings.TrimSuffix(name, filepath.Ext(name))
 	if stem == "" || stem == "." || stem == ".." {
-		return errors.New("ชื่อไฟล์ EMK ไม่ถูกต้อง")
+		return errors.New("ชื่อไฟล์ต้นทางไม่ถูกต้อง")
 	}
 
 	folder := filepath.Join(destination, stem)

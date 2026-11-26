@@ -21,7 +21,7 @@ func TestScanSongsNested(t *testing.T) {
 	if err := os.Mkdir(child, 0755); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{filepath.Join(root, "one.EMK"), filepath.Join(child, "two.emk")}
+	want := []string{filepath.Join(root, "one.EMK"), filepath.Join(child, "two.SMD")}
 	for _, path := range append(append([]string(nil), want...), filepath.Join(child, "skip.mid")) {
 		if err := os.WriteFile(path, nil, 0644); err != nil {
 			t.Fatal(err)
