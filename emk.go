@@ -66,6 +66,9 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 	if len(data) < 50 || len(data) > maxSize {
 		return nil, errors.New("ขนาดไฟล์อยู่นอกช่วงที่รองรับ")
 	}
+	if bytes.HasPrefix(data, []byte(sibSignature)) {
+		return readSIB(data, metadataOnly)
+	}
 	if bytes.HasPrefix(data, []byte("HNKF")) {
 		return readHNK(data, metadataOnly)
 	}
@@ -81,7 +84,7 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 		}
 	}
 	if string(data[:5]) != ".SFDS" {
-		return nil, errors.New("ไม่รู้จักรูปแบบไฟล์ EMK, SMD หรือ HNK")
+		return nil, errors.New("ไม่รู้จักรูปแบบไฟล์ EMK, SMD, HNK หรือ SIB")
 	}
 	start := binary.LittleEndian.Uint64(data[0x22:])
 	end := binary.LittleEndian.Uint64(data[0x2a:])
