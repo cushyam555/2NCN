@@ -63,6 +63,9 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(data) <= maxSize && bytes.HasPrefix(data, []byte("MThd")) {
+		return readKAR(data, metadataOnly)
+	}
 	if len(data) < 50 || len(data) > maxSize {
 		return nil, errors.New("ขนาดไฟล์อยู่นอกช่วงที่รองรับ")
 	}
@@ -84,7 +87,7 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 		}
 	}
 	if string(data[:5]) != ".SFDS" {
-		return nil, errors.New("ไม่รู้จักรูปแบบไฟล์ EMK, SMD, HNK หรือ SIB")
+		return nil, errors.New("ไม่รู้จักรูปแบบไฟล์ EMK, SMD, HNK, SIB หรือ KAR")
 	}
 	start := binary.LittleEndian.Uint64(data[0x22:])
 	end := binary.LittleEndian.Uint64(data[0x2a:])
@@ -189,7 +192,13 @@ func readSongParts(source string) (map[string][]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
-	return unpack(file)
+	parts, err := unpack(file)
+	if err == nil && strings.EqualFold(filepath.Ext(source), ".kar") && bytes.HasPrefix(parts[".lyr"], []byte("\r\n")) {
+		name := filepath.Base(source)
+		title := strings.TrimSuffix(name, filepath.Ext(name))
+		parts[".lyr"] = append(encodeKARLyrics(title), parts[".lyr"]...)
+	}
+	return parts, err
 }
 
 func convert(source, destination string) error {
