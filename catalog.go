@@ -56,8 +56,8 @@ func songInfo(path string) (song, error) {
 			entry.version += " (XSTM)"
 		}
 	}
-	if string(parts["FORMAT"]) == "SMD" {
-		entry.version = "SMD"
+	if format := string(parts["FORMAT"]); format == "SMD" || format == "HNK" {
+		entry.version = format
 	}
 	entry.artist = info["ARTIST"]
 	lyrics := strings.Split(strings.ReplaceAll(decodeText(parts[".lyr"]), "\r\n", "\n"), "\n")
@@ -74,7 +74,7 @@ func songInfo(path string) (song, error) {
 
 func supportedSongPath(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".emk", ".smd":
+	case ".emk", ".smd", ".hnk":
 		return true
 	default:
 		return false
@@ -111,7 +111,7 @@ func matchesSong(entry song, terms []string) bool {
 		return true
 	}
 	format := entry.version
-	if format != "SMD" {
+	if format != "SMD" && format != "HNK" {
 		format += "\nEMK v" + entry.version
 	}
 	fields := strings.ToLower(strings.Join([]string{

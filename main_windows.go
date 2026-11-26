@@ -53,7 +53,7 @@ func wide(s string) *uint16 {
 func message(owner uintptr, body string, icon uintptr) {
 	user32.NewProc("MessageBoxW").Call(owner,
 		uintptr(unsafe.Pointer(wide(body))),
-		uintptr(unsafe.Pointer(wide("2NCN — EMK / SMD → NCN"))), icon)
+		uintptr(unsafe.Pointer(wide("2NCN — EMK / SMD / HNK → NCN"))), icon)
 }
 
 func selectFiles(owner uintptr) ([]string, error) {
@@ -64,10 +64,10 @@ func selectFiles(owner uintptr) ([]string, error) {
 		noChangeDir      = 0x8
 	)
 	buffer := make([]uint16, 65536)
-	filter := append(utf16.Encode([]rune("EMK / SMD\x00*.emk;*.smd\x00")), 0)
+	filter := append(utf16.Encode([]rune("EMK / SMD / HNK\x00*.emk;*.smd;*.hnk\x00")), 0)
 	dialog := openFileName{
 		Owner: owner, Filter: &filter[0], FilterIndex: 1, File: &buffer[0],
-		MaxFile: uint32(len(buffer)), Title: wide("เลือกไฟล์ EMK หรือ SMD"),
+		MaxFile: uint32(len(buffer)), Title: wide("เลือกไฟล์ EMK, SMD หรือ HNK"),
 		Flags: explorer | allowMultiSelect | fileMustExist | noChangeDir,
 	}
 	dialog.Size = uint32(unsafe.Sizeof(dialog))

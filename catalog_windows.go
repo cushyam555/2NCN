@@ -433,7 +433,7 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				ui.load(paths, "")
 			}
 		case idFolder:
-			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์เพลง EMK / SMD")
+			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์เพลง EMK / SMD / HNK")
 			if err != nil {
 				message(hwnd, err.Error(), 0x10)
 			} else if folder != "" {
@@ -511,13 +511,13 @@ func main() {
 		return
 	}
 	const defaultPosition = 0x80000000
-	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK / SMD"))),
+	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK / SMD / HNK"))),
 		0x00cf0000, defaultPosition, defaultPosition, 1100, 680, 0, 0, instance, 0)
 	if handle == 0 {
 		message(0, err.Error(), 0x10)
 		return
 	}
-	ui.files = makeControl(handle, "BUTTON", "เลือก EMK / SMD", 0x10000, idFiles, instance)
+	ui.files = makeControl(handle, "BUTTON", "เลือกไฟล์เพลง", 0x10000, idFiles, instance)
 	ui.folder = makeControl(handle, "BUTTON", "สแกนโฟลเดอร์", 0x10000, idFolder, instance)
 	ui.selected = makeControl(handle, "BUTTON", "แปลงที่เลือก", 0x10000, idSelected, instance)
 	ui.visible = makeControl(handle, "BUTTON", "แปลงผลค้นหา", 0x10000, idVisible, instance)
@@ -560,7 +560,7 @@ func main() {
 		sendMessage.Call(ui.list, lvmInsertColumnW, uintptr(i), uintptr(unsafe.Pointer(&column)))
 		runtime.KeepAlive(column)
 	}
-	ui.statusText("เลือกไฟล์ EMK / SMD หรือสแกนโฟลเดอร์เพื่อดูรายการเพลง")
+	ui.statusText("เลือกไฟล์ EMK / SMD / HNK หรือสแกนโฟลเดอร์เพื่อดูรายการเพลง")
 	ui.setBusy(false)
 	var rect [4]int32
 	user32.NewProc("GetClientRect").Call(handle, uintptr(unsafe.Pointer(&rect[0])))
