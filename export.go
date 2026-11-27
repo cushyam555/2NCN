@@ -18,17 +18,24 @@ func validSongCode(code string) bool {
 		strings.IndexFunc(code, unicode.IsControl) == -1 && filepath.IsLocal(code)
 }
 
+func sourceFileCode(path string) string {
+	name := filepath.Base(path)
+	return strings.TrimSuffix(name, filepath.Ext(name))
+}
+
+func sourceSongCode(entry song) string {
+	if entry.code != "" {
+		return entry.code
+	}
+	return sourceFileCode(entry.path)
+}
+
 func exportCodes(rows []song, indices []int, start string) ([]string, error) {
 	codes := make([]string, len(indices))
 	start = strings.TrimSpace(start)
 	if start == "" || len(indices) == 0 {
 		for i, index := range indices {
-			song := rows[index]
-			codes[i] = song.code
-			if codes[i] == "" {
-				name := filepath.Base(song.path)
-				codes[i] = strings.TrimSuffix(name, filepath.Ext(name))
-			}
+			codes[i] = sourceSongCode(rows[index])
 		}
 		return codes, nil
 	}

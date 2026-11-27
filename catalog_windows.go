@@ -105,6 +105,7 @@ type update struct {
 	index    int
 	result   string
 	code     string
+	showCode bool
 	complete bool
 	issues   []scanIssue
 }
@@ -256,13 +257,13 @@ func (w *catalogWindow) load(paths []string, folder string) {
 			if err != nil {
 				entry.status = skippedSong
 				entry.state = err.Error()
-				issues = append(issues, scanIssue{"อ่านไฟล์เพลง", path, err.Error()})
+				issues = append(issues, scanIssue{operation: "อ่านไฟล์เพลง", path: path, reason: err.Error(), songCode: sourceSongCode(entry)})
 			}
 			updates <- update{entry: entry}
 		}
 		if folder != "" {
 			scanSongs(folder, visit, func(path string, err error) {
-				issues = append(issues, scanIssue{"สำรวจเส้นทาง", path, err.Error()})
+				issues = append(issues, scanIssue{operation: "สำรวจเส้นทาง", path: path, reason: err.Error()})
 			})
 		} else {
 			for _, path := range paths {
@@ -312,7 +313,7 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool)
 	}
 	jobs := make([]task, 0, len(indices))
 	for i, index := range indices {
-		job := task{index: index, path: w.rows[index].path}
+		job := task{index: index, path: w.rows[index].path, code: sourceFileCode(w.rows[index].path)}
 		if flat {
 			job.code = codes[i]
 		}
@@ -334,7 +335,7 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool)
 			if err != nil {
 				result = err.Error()
 			}
-			updates <- update{index: job.index, result: result, code: job.code}
+			updates <- update{index: job.index, result: result, code: job.code, showCode: flat}
 		}
 		updates <- update{complete: true}
 	}()
@@ -406,13 +407,16 @@ func (w *catalogWindow) poll() {
 				if event.result == "" {
 					row.status = successfulSong
 					row.state = "แปลงแล้ว"
-					if event.code != "" {
+					if event.showCode && event.code != "" {
 						w.rows[event.index].state += " (" + event.code + ")"
 					}
 					w.success++
 				} else {
 					row.status = skippedSong
-					w.conversionIssues = append(w.conversionIssues, scanIssue{"ข้ามการแปลง", row.path, event.result})
+					w.conversionIssues = append(w.conversionIssues, scanIssue{
+						operation: "ข้ามการแปลง", path: row.path, reason: event.result,
+						songCode: sourceSongCode(*row), outputCode: event.code,
+					})
 					w.failures++
 				}
 			} else {
