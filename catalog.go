@@ -92,6 +92,10 @@ func supportedSongPath(path string) bool {
 	return slices.Contains(songExtensions[:], strings.ToLower(filepath.Ext(path)))
 }
 
+func matchesSongExtension(path, extension string) bool {
+	return extension == "" || strings.EqualFold(filepath.Ext(path), extension)
+}
+
 func scanSongs(folder, extension string, visit func(string), failed func(string, error)) {
 	filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -99,7 +103,7 @@ func scanSongs(folder, extension string, visit func(string), failed func(string,
 			return nil
 		}
 		if entry.Type().IsRegular() && supportedSongPath(path) &&
-			(extension == "" || strings.EqualFold(filepath.Ext(path), extension)) {
+			matchesSongExtension(path, extension) {
 			visit(path)
 		}
 		return nil
@@ -143,12 +147,13 @@ func (entry song) columnText(column int) string {
 	return [catalogColumnCount]string{entry.title, entry.artist, entry.version, entry.path, entry.state}[column]
 }
 
-func catalogView(rows []song, query string, status songStatus, column, order int) []int {
+func catalogView(rows []song, query string, status songStatus, extension string, column, order int) []int {
 	matches := matchingSongs(rows, query)
-	if status != allSongs {
+	if status != allSongs || extension != "" {
 		filtered := matches[:0]
 		for _, index := range matches {
-			if rows[index].status == status {
+			entry := rows[index]
+			if (status == allSongs || entry.status == status) && matchesSongExtension(entry.path, extension) {
 				filtered = append(filtered, index)
 			}
 		}

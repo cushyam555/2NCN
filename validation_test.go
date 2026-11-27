@@ -40,7 +40,7 @@ func TestCatalogViewPreservesRowIndices(t *testing.T) {
 		{title: "Delta", artist: "Other", status: skippedSong},
 	}
 	for order, want := range map[int][]int{1: {1, 0}, -1: {0, 1}} {
-		if got := catalogView(rows, "Band", skippedSong, 0, order); !slices.Equal(got, want) {
+		if got := catalogView(rows, "Band", skippedSong, "", 0, order); !slices.Equal(got, want) {
 			t.Fatalf("order %d returned %v, want %v", order, got, want)
 		}
 	}

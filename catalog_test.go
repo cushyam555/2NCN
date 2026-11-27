@@ -75,12 +75,34 @@ func TestCatalogViewSortsByDisplayedColumn(t *testing.T) {
 		{title: "beta", artist: "กานต์", version: "3.1", path: "A.emk", state: "ข้าม"},
 	}
 	for column, ascending := range [][]int{{0, 1}, {1, 0}, {1, 0}, {1, 0}, {1, 0}} {
-		if got := catalogView(rows, "", allSongs, column, 1); !reflect.DeepEqual(got, ascending) {
+		if got := catalogView(rows, "", allSongs, "", column, 1); !reflect.DeepEqual(got, ascending) {
 			t.Errorf("column %d ascending = %v, want %v", column, got, ascending)
 		}
 		descending := []int{ascending[1], ascending[0]}
-		if got := catalogView(rows, "", allSongs, column, -1); !reflect.DeepEqual(got, descending) {
+		if got := catalogView(rows, "", allSongs, "", column, -1); !reflect.DeepEqual(got, descending) {
 			t.Errorf("column %d descending = %v, want %v", column, got, descending)
+		}
+	}
+}
+
+func TestCatalogViewFiltersLoadedFileTypes(t *testing.T) {
+	rows := []song{
+		{title: "Beta", artist: "Band", path: "beta.EMK", status: skippedSong},
+		{title: "Alpha", artist: "Band", path: "alpha.emk", status: skippedSong},
+		{title: "Gamma", artist: "Band", path: "gamma.kar", status: skippedSong},
+		{title: "Delta", artist: "Band", path: "delta.emk", status: successfulSong},
+		{title: "Echo", artist: "Other", path: "echo.emk", status: skippedSong},
+	}
+	for _, tc := range []struct {
+		extension string
+		want      []int
+	}{
+		{".emk", []int{1, 0}},
+		{".kar", []int{2}},
+		{"", []int{1, 0, 2}},
+	} {
+		if got := catalogView(rows, "Band", skippedSong, tc.extension, 0, 1); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("filter %q = %v, want %v", tc.extension, got, tc.want)
 		}
 	}
 }

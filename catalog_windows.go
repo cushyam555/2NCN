@@ -18,6 +18,7 @@ const (
 	wmSetFont           = 0x30
 	idFiles             = 101
 	idFolder            = 102
+	idScanType          = 118
 	idConvert           = 103
 	idSearch            = 106
 	idClear             = 107
@@ -119,6 +120,7 @@ type catalogWindow struct {
 	scanIssues, conversionIssues                  []scanIssue
 	statusFilter, statusLabel                     uintptr
 	scanType, scanTypeLabel                       uintptr
+	extensionFilter                               string
 	filter                                        songStatus
 	sortColumn, sortOrder                         int
 	reportButton                                  uintptr
@@ -151,8 +153,8 @@ func (w *catalogWindow) layout(width, height int) {
 	moveWindow.Call(w.codeHint, 416, 94, uintptr(max(width-428, 0)), 26, 1)
 	moveWindow.Call(w.statusLabel, 12, 132, 65, 26, 1)
 	moveWindow.Call(w.statusFilter, 80, 127, 185, 180, 1)
-	moveWindow.Call(w.scanTypeLabel, 285, 132, 170, 26, 1)
-	moveWindow.Call(w.scanType, 455, 127, 155, 200, 1)
+	moveWindow.Call(w.scanTypeLabel, 285, 132, 85, 26, 1)
+	moveWindow.Call(w.scanType, 375, 127, 155, 200, 1)
 	moveWindow.Call(w.list, 12, 168, uintptr(width-24), uintptr(height-201), 1)
 	moveWindow.Call(w.status, 12, uintptr(height-25), uintptr(width-24), 22, 1)
 }
@@ -212,7 +214,7 @@ func (w *catalogWindow) applySearch() {
 	var buffer [1025]uint16
 	user32.NewProc("GetWindowTextW").Call(w.search, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
 	w.setSelected(^uintptr(0), false)
-	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.sortColumn, w.sortOrder)
+	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.extensionFilter, w.sortColumn, w.sortOrder)
 	sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 0)
 	if len(w.shown) > 0 {
 		sendMessage.Call(w.list, 0x1013, 0, 0) // LVM_ENSUREVISIBLE
@@ -424,7 +426,9 @@ func (w *catalogWindow) poll() {
 					w.failures++
 				}
 			} else {
-				w.shown = append(w.shown, len(w.rows))
+				if matchesSongExtension(event.entry.path, w.extensionFilter) {
+					w.shown = append(w.shown, len(w.rows))
+				}
 				w.rows = append(w.rows, event.entry)
 			}
 		default:
@@ -479,11 +483,9 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				ui.load(paths, "", "")
 			}
 		case idFolder:
-			extension := ""
+			extension := ui.extensionFilter
 			title := "เลือกโฟลเดอร์เพลงทุกชนิดที่รองรับ"
-			selected, _, _ := sendMessage.Call(ui.scanType, 0x147, 0, 0) // CB_GETCURSEL
-			if selected >= 1 && selected <= uintptr(len(songExtensions)) {
-				extension = songExtensions[selected-1]
+			if extension != "" {
 				title = "เลือกโฟลเดอร์เพลง " + strings.ToUpper(extension)
 			}
 			folder, err := selectFolder(hwnd, title)
@@ -503,6 +505,17 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			ui.startConversion(hwnd, ui.selection(), true)
 		case idVisible:
 			ui.startConversion(hwnd, ui.shown, true)
+		case idScanType:
+			if uint16(wParam>>16) == 1 { // CBN_SELCHANGE
+				selected, _, _ := sendMessage.Call(ui.scanType, 0x147, 0, 0) // CB_GETCURSEL
+				if selected <= uintptr(len(songExtensions)) {
+					ui.extensionFilter = ""
+					if selected != 0 {
+						ui.extensionFilter = songExtensions[selected-1]
+					}
+					ui.applySearch()
+				}
+			}
 		case idStatusFilter:
 			if uint16(wParam>>16) == 1 { // CBN_SELCHANGE
 				selected, _, _ := sendMessage.Call(ui.statusFilter, 0x147, 0, 0) // CB_GETCURSEL
@@ -605,8 +618,8 @@ func main() {
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
 	ui.statusLabel = makeControl(handle, "STATIC", "สถานะ", 0, 116, instance)
 	ui.statusFilter = makeControl(handle, "COMBOBOX", "", 0x210003, idStatusFilter, instance)
-	ui.scanTypeLabel = makeControl(handle, "STATIC", "ชนิดไฟล์สำหรับสแกน", 0, 117, instance)
-	ui.scanType = makeControl(handle, "COMBOBOX", "", 0x210003, 118, instance)
+	ui.scanTypeLabel = makeControl(handle, "STATIC", "ชนิดไฟล์", 0, 117, instance)
+	ui.scanType = makeControl(handle, "COMBOBOX", "", 0x210003, idScanType, instance)
 	ui.reportButton = makeControl(handle, "BUTTON", "รายงานปัญหา", 0x10000, idScanReport, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
 	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
