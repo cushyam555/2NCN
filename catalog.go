@@ -24,6 +24,7 @@ const (
 )
 
 type song struct {
+	ncn                                       *ncnSet
 	status                                    songStatus
 	path, title, artist, version, code, state string
 }
@@ -171,10 +172,14 @@ func (entry song) matchesType(extension string) bool {
 	return matchesSongExtension(entry.path, extension)
 }
 
-func convertibleIndices(rows []song, indices []int) []int {
+func (entry song) canExport(flat bool) bool {
+	return entry.version != "NCN" || (flat && entry.ncn != nil)
+}
+
+func convertibleIndices(rows []song, indices []int, flat bool) []int {
 	var result []int
 	for _, index := range indices {
-		if rows[index].version != "NCN" {
+		if rows[index].canExport(flat) {
 			result = append(result, index)
 		}
 	}

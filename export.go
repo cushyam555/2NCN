@@ -66,6 +66,23 @@ func convertFlat(source, destination, code string) error {
 	return writeNCNSet(destination, code, parts)
 }
 
+func exportSongFlat(entry song, destination, code string) error {
+	if entry.version != "NCN" {
+		return convertFlat(entry.path, destination, code)
+	}
+	if !validSongCode(code) {
+		return fmt.Errorf("รหัสเพลงใช้เป็นชื่อไฟล์ไม่ได้ (%s)", code)
+	}
+	if entry.ncn == nil {
+		return errors.New("ชุด NCN ไม่ผ่านการตรวจ")
+	}
+	parts := make(map[string][]byte, len(ncnExtensions))
+	if _, err := inspectNCN(*entry.ncn, parts); err != nil {
+		return err
+	}
+	return writeNCNSet(destination, code, parts)
+}
+
 func writeNCNSet(folder, code string, parts map[string][]byte) error {
 	var written []string
 	success := false

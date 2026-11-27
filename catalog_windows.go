@@ -218,7 +218,7 @@ func (w *catalogWindow) applySearch() {
 	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.extensionFilter, w.sortColumn, w.sortOrder)
 	w.hasConvertibleShown = false
 	for _, index := range w.shown {
-		if w.rows[index].version != "NCN" {
+		if w.rows[index].canExport(true) {
 			w.hasConvertibleShown = true
 			break
 		}
@@ -286,7 +286,7 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 				issues = append(issues, scanIssue{operation: "สำรวจเส้นทาง", path: path, reason: err.Error()})
 			}
 			scanSongs(folder, extension, visit, func(set ncnSet) {
-				entry, err := inspectNCN(set)
+				entry, err := inspectNCN(set, nil)
 				record(entry, "ตรวจชุด NCN", err)
 			}, failed)
 		} else {
@@ -299,7 +299,7 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 }
 
 func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool) {
-	indices = convertibleIndices(w.rows, indices)
+	indices = convertibleIndices(w.rows, indices, flat)
 	if len(indices) == 0 || w.updates != nil {
 		return
 	}
@@ -333,17 +333,21 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool)
 	w.success, w.failures = 0, 0
 	w.statusText("กำลังแปลงเพลง…")
 	type task struct {
-		index      int
-		path, code string
+		index int
+		entry song
+		code  string
 	}
 	jobs := make([]task, 0, len(indices))
 	for i, index := range indices {
-		job := task{index: index, path: w.rows[index].path, code: sourceFileCode(w.rows[index].path)}
+		job := task{index: index, entry: w.rows[index], code: sourceFileCode(w.rows[index].path)}
 		if flat {
 			job.code = codes[i]
 		}
 		jobs = append(jobs, job)
 		w.rows[index].state = "รอแปลง"
+		if job.entry.ncn != nil {
+			w.rows[index].state = "รอคัดลอก"
+		}
 	}
 	w.refreshList()
 	updates := make(chan update, 256)
@@ -353,9 +357,9 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool)
 			result := ""
 			var err error
 			if flat {
-				err = convertFlat(job.path, folder, job.code)
+				err = exportSongFlat(job.entry, folder, job.code)
 			} else {
-				err = convert(job.path, folder)
+				err = convert(job.entry.path, folder)
 			}
 			if err != nil {
 				result = err.Error()
@@ -390,7 +394,7 @@ func (w *catalogWindow) contextMenu(owner, coords uintptr) {
 			w.setSelected(index, true)
 		}
 	}
-	selected := convertibleIndices(w.rows, w.selection())
+	selected := convertibleIndices(w.rows, w.selection(), true)
 	if len(selected) == 0 {
 		return
 	}
@@ -432,6 +436,9 @@ func (w *catalogWindow) poll() {
 				if event.result == "" {
 					row.status = successfulSong
 					row.state = "แปลงแล้ว"
+					if row.ncn != nil {
+						row.state = "คัดลอกแล้ว"
+					}
 					if event.showCode && event.code != "" {
 						w.rows[event.index].state += " (" + event.code + ")"
 					}
@@ -449,7 +456,7 @@ func (w *catalogWindow) poll() {
 					w.shown = append(w.shown, len(w.rows))
 				}
 				w.rows = append(w.rows, event.entry)
-				w.hasConvertibleRows = w.hasConvertibleRows || event.entry.version != "NCN"
+				w.hasConvertibleRows = w.hasConvertibleRows || event.entry.canExport(false)
 			}
 		default:
 			goto refreshed
@@ -650,7 +657,7 @@ func main() {
 			return
 		}
 	}
-	for _, label := range []string{"ทั้งหมด", "ผ่าน / แปลงแล้ว", "มีปัญหา", "ยังไม่ตรวจ"} {
+	for _, label := range []string{"ทั้งหมด", "ผ่าน / ส่งออกแล้ว", "มีปัญหา", "ยังไม่ตรวจ"} {
 		sendMessage.Call(ui.statusFilter, 0x143, 0, uintptr(unsafe.Pointer(wide(label)))) // CB_ADDSTRING
 	}
 	sendMessage.Call(ui.statusFilter, 0x14e, 0, 0)

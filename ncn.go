@@ -58,7 +58,7 @@ func readNCNComponent(path string) ([]byte, error) {
 	return data, nil
 }
 
-func inspectNCN(set ncnSet) (song, error) {
+func inspectNCN(set ncnSet, parts map[string][]byte) (song, error) {
 	entry := song{code: set.code, title: set.code, version: "NCN", status: successfulSong, state: "ตรวจผ่าน"}
 	issues := make([]string, 0, 4)
 	for i, extension := range ncnExtensions {
@@ -74,6 +74,9 @@ func inspectNCN(set ncnSet) (song, error) {
 		if err != nil {
 			issues = append(issues, fmt.Sprintf("อ่าน %s ไม่ได้: %v", path, err))
 			continue
+		}
+		if parts != nil {
+			parts[extension] = data
 		}
 		switch extension {
 		case ".mid":
@@ -107,6 +110,7 @@ func inspectNCN(set ncnSet) (song, error) {
 		entry.state = strings.Join(issues, " | ")
 		return entry, errors.New(entry.state)
 	}
+	entry.ncn = &set
 	return entry, nil
 }
 

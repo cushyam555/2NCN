@@ -29,7 +29,7 @@ func TestScanNCNLibrary(t *testing.T) {
 
 	var rows []song
 	scanSongs(root, ncnExtension, func(path string) { t.Errorf("unexpected package %s", path) }, func(set ncnSet) {
-		entry, _ := inspectNCN(set)
+		entry, _ := inspectNCN(set, nil)
 		rows = append(rows, entry)
 	}, func(path string, err error) {
 		t.Errorf("scan %s: %v", path, err)
@@ -54,8 +54,34 @@ func TestScanNCNLibrary(t *testing.T) {
 	if got := catalogView(rows, "", skippedSong, ncnExtension, 0, 0); len(got) != 2 {
 		t.Fatalf("problem filter returned %v", got)
 	}
-	if got := convertibleIndices(rows, []int{0, 1, 2}); len(got) != 0 {
+	if got := convertibleIndices(rows, []int{0, 1, 2}, false); len(got) != 0 {
 		t.Fatalf("NCN sets appeared in convertible rows: %v", got)
+	}
+	if got := convertibleIndices(rows, []int{0, 1, 2}, true); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("flat export returned %v, want only the complete set", got)
+	}
+	destination := t.TempDir()
+	if err := exportSongFlat(rows[0], destination, "BT001"); err != nil {
+		t.Fatal(err)
+	}
+	for i, extension := range ncnExtensions {
+		want, err := os.ReadFile(rows[0].ncn.paths[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(destination, "BT001"+extension))
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("exported %s differs from original: %v", extension, err)
+		}
+	}
+	if err := os.WriteFile(rows[0].ncn.paths[0], []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportSongFlat(rows[0], destination, "BT002"); err == nil {
+		t.Fatal("copied a set that became invalid after scanning")
+	}
+	if _, err := os.Stat(filepath.Join(destination, "BT002.mid")); !os.IsNotExist(err) {
+		t.Fatalf("invalid set left an output: %v", err)
 	}
 }
 
