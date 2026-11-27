@@ -164,23 +164,44 @@ func restoreMIDIHeader(midi []byte) error {
 	if bytes.HasPrefix(midi, []byte("MThd")) {
 		return nil
 	}
-	if len(midi) < 22 || (string(midi[:4]) != "zxio" && string(midi[:4]) != "OOn\xac") ||
-		binary.BigEndian.Uint32(midi[4:8]) != 6 {
-		return errors.New("ไม่รู้จักหัวไฟล์ MIDI")
+	signature := midi[:min(len(midi), 4)]
+	invalidHeader := fmt.Errorf("ไม่รู้จักหัวไฟล์ MIDI (% X)", signature)
+	if len(midi) < 22 || binary.BigEndian.Uint32(midi[4:8]) != 6 {
+		return invalidHeader
 	}
+	format := binary.BigEndian.Uint16(midi[8:10])
+	tracks := binary.BigEndian.Uint16(midi[10:12])
+	division := binary.BigEndian.Uint16(midi[12:14])
+	if format > 2 || tracks == 0 || (format == 0 && tracks != 1) || division == 0 {
+		return invalidHeader
+	}
+	if division&0x8000 != 0 {
+		frames := int8(division >> 8)
+		if (frames != -24 && frames != -25 && frames != -29 && frames != -30) || byte(division) == 0 {
+			return invalidHeader
+		}
+	}
+
 	position := 14
-	for range int(binary.BigEndian.Uint16(midi[10:12])) {
+	legacySignature := string(signature) == "zxio" || string(signature) == "OOn\xac"
+	for range tracks {
 		if position+8 > len(midi) || string(midi[position:position+4]) != "MTrk" {
-			return errors.New("ข้อมูลแทร็ก MIDI ไม่ถูกต้อง")
+			return fmt.Errorf("โครงสร้างแทร็ก MIDI ไม่ถูกต้อง (หัว % X)", signature)
 		}
 		size := binary.BigEndian.Uint32(midi[position+4 : position+8])
 		if uint64(size) > uint64(len(midi)-position-8) {
-			return errors.New("ขนาดข้อมูลแทร็ก MIDI ไม่ถูกต้อง")
+			return fmt.Errorf("แทร็ก MIDI ถูกตัดขาด (หัว % X)", signature)
 		}
-		position += 8 + int(size)
+		start := position + 8
+		position = start + int(size)
+		// For an unrecognized signature, require a standard end-of-track
+		// event as additional evidence that this is a MIDI track.
+		if !legacySignature && !bytes.HasSuffix(midi[start:position], []byte{0xff, 0x2f, 0}) {
+			return fmt.Errorf("ไม่พบจุดจบแทร็ก MIDI (หัว % X)", signature)
+		}
 	}
 	if position != len(midi) {
-		return errors.New("ขนาดข้อมูลแทร็ก MIDI ไม่ถูกต้อง")
+		return fmt.Errorf("ขนาดข้อมูลแทร็ก MIDI ไม่ตรงกับหัวไฟล์ (% X)", signature)
 	}
 	copy(midi[:4], "MThd")
 	return nil
