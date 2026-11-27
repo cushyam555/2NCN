@@ -167,9 +167,9 @@ func completeSFDS(parts map[string][]byte) (map[string][]byte, error) {
 	if err := restoreMIDIHeader(parts[".mid"]); err != nil {
 		return nil, err
 	}
-	lyrics, haveLyrics := parts[".lyr"]
-	cursor, haveCursor := parts[".cur"]
-	if haveLyrics && haveCursor && len(lyrics) != 0 && len(cursor) != 0 {
+	haveLyrics := hasNCNLyrics(parts[".lyr"])
+	haveCursor := len(parts[".cur"]) != 0
+	if haveLyrics && haveCursor {
 		return parts, nil
 	}
 
@@ -184,9 +184,9 @@ func completeSFDS(parts map[string][]byte) (map[string][]byte, error) {
 	if err != nil {
 		missing := ".lyr และ .cur"
 		switch {
-		case len(lyrics) != 0:
+		case haveLyrics:
 			missing = ".cur"
-		case len(cursor) != 0:
+		case haveCursor:
 			missing = ".lyr"
 		}
 		return nil, fmt.Errorf("ไฟล์ EMK ขาด %s และกู้จาก MIDI ไม่ได้: %w", missing, err)
@@ -273,7 +273,13 @@ func readSongParts(source string) (map[string][]byte, error) {
 		title := strings.TrimSuffix(name, filepath.Ext(name))
 		parts[".lyr"] = append(encodeKARLyrics(title), parts[".lyr"]...)
 	}
-	return parts, err
+	if err != nil {
+		return nil, err
+	}
+	if err := validateNCNParts(parts); err != nil {
+		return nil, err
+	}
+	return parts, nil
 }
 
 func convert(source, destination string) error {

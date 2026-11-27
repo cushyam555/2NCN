@@ -18,7 +18,7 @@ var report struct {
 
 const idCopyScanReport = 201
 
-func showScanReport(owner uintptr, issues []scanIssue) {
+func showScanReport(owner uintptr, scanIssues, conversionIssues []scanIssue) {
 	showWindow := user32.NewProc("ShowWindow")
 	activate := user32.NewProc("SetForegroundWindow")
 	if report.handle != 0 {
@@ -42,11 +42,15 @@ func showScanReport(owner uintptr, issues []scanIssue) {
 	}
 
 	var content strings.Builder
-	fmt.Fprintf(&content, "อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ\r\n\r\n", len(issues))
-	for i, issue := range issues {
-		fmt.Fprintf(&content, "%d. %s\r\n%s\r\n%s\r\n\r\n", i+1, issue.operation, issue.path, issue.reason)
+	writeIssues := func(heading string, issues []scanIssue) {
+		fmt.Fprintf(&content, "%s %d รายการ\r\n\r\n", heading, len(issues))
+		for i, issue := range issues {
+			fmt.Fprintf(&content, "%d. %s\r\n%s\r\n%s\r\n\r\n", i+1, issue.operation, issue.path, issue.reason)
+		}
 	}
-	title := wide("2NCN — รายงานข้อผิดพลาดจากการสแกน")
+	writeIssues("ปัญหาจากการสแกน", scanIssues)
+	writeIssues("เพลงที่ข้ามในการแปลงครั้งล่าสุด", conversionIssues)
+	title := wide("2NCN — รายงานปัญหา")
 	const defaultPosition = 0x80000000
 	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
 		0x00cf0000, defaultPosition, defaultPosition, 900, 570, owner, 0, instance, 0)

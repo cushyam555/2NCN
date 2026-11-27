@@ -4,13 +4,26 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"golang.org/x/text/collate"
 	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/language"
+)
+
+type songStatus uint8
+
+const (
+	allSongs songStatus = iota
+	successfulSong
+	skippedSong
+	uncheckedSong
 )
 
 type song struct {
+	status                                    songStatus
 	path, title, artist, version, code, state string
 }
 
@@ -123,4 +136,24 @@ func matchesSong(entry song, terms []string) bool {
 		}
 	}
 	return true
+}
+
+func catalogView(rows []song, query string, status songStatus, titleOrder int) []int {
+	matches := matchingSongs(rows, query)
+	if status != allSongs {
+		filtered := matches[:0]
+		for _, index := range matches {
+			if rows[index].status == status {
+				filtered = append(filtered, index)
+			}
+		}
+		matches = filtered
+	}
+	if titleOrder != 0 {
+		byTitle := collate.New(language.Thai, collate.IgnoreCase)
+		sort.SliceStable(matches, func(i, j int) bool {
+			return byTitle.CompareString(rows[matches[i]].title, rows[matches[j]].title)*titleOrder < 0
+		})
+	}
+	return matches
 }

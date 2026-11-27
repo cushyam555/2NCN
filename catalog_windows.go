@@ -25,6 +25,7 @@ const (
 	idVisible           = 109
 	idStartCode         = 111
 	idScanReport        = 114
+	idStatusFilter      = 115
 	wmContextMenu       = 0x7b
 	lvmGetNextItem      = 0x100c
 	lvmSubItemHitTest   = 0x1039
@@ -89,6 +90,11 @@ type listItem struct {
 	Param            uintptr
 }
 
+type listNotification struct {
+	Header        notifyHeader
+	Item, SubItem int32
+}
+
 type displayInfo struct {
 	Header notifyHeader
 	listItem
@@ -109,7 +115,10 @@ type catalogWindow struct {
 	codeLabel, startCode, codeHint                uintptr
 	shown                                         []int
 	totalTasks                                    int
-	scanIssues                                    []scanIssue
+	scanIssues, conversionIssues                  []scanIssue
+	statusFilter, statusLabel                     uintptr
+	filter                                        songStatus
+	titleOrder                                    int
 	reportButton                                  uintptr
 	rows                                          []song
 	updates                                       <-chan update
@@ -125,7 +134,7 @@ func makeControl(owner uintptr, class, caption string, style, id, instance uintp
 
 func (w *catalogWindow) layout(width, height int) {
 	width = max(width, 24)
-	height = max(height, 163)
+	height = max(height, 201)
 	moveWindow.Call(w.files, 12, 12, 130, 30, 1)
 	moveWindow.Call(w.folder, 150, 12, 160, 30, 1)
 	moveWindow.Call(w.selected, 318, 12, 160, 30, 1)
@@ -138,7 +147,9 @@ func (w *catalogWindow) layout(width, height int) {
 	moveWindow.Call(w.codeLabel, 12, 94, 250, 26, 1)
 	moveWindow.Call(w.startCode, 265, 89, 140, 30, 1)
 	moveWindow.Call(w.codeHint, 416, 94, uintptr(max(width-428, 0)), 26, 1)
-	moveWindow.Call(w.list, 12, 130, uintptr(width-24), uintptr(height-163), 1)
+	moveWindow.Call(w.statusLabel, 12, 132, 65, 26, 1)
+	moveWindow.Call(w.statusFilter, 80, 127, 185, 180, 1)
+	moveWindow.Call(w.list, 12, 168, uintptr(width-24), uintptr(height-201), 1)
 	moveWindow.Call(w.status, 12, uintptr(height-25), uintptr(width-24), 22, 1)
 }
 
@@ -152,7 +163,8 @@ func (w *catalogWindow) setBusy(busy bool) {
 	enableWindow.Call(w.search, enabled(!busy))
 	enableWindow.Call(w.clear, enabled(!busy))
 	enableWindow.Call(w.startCode, enabled(!busy))
-	enableWindow.Call(w.reportButton, enabled(!busy && len(w.scanIssues) > 0))
+	enableWindow.Call(w.statusFilter, enabled(!busy))
+	enableWindow.Call(w.reportButton, enabled(!busy && len(w.scanIssues)+len(w.conversionIssues) > 0))
 	w.updateActions(busy)
 }
 
@@ -195,7 +207,7 @@ func (w *catalogWindow) applySearch() {
 	var buffer [1025]uint16
 	user32.NewProc("GetWindowTextW").Call(w.search, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
 	w.setSelected(^uintptr(0), false)
-	w.shown = matchingSongs(w.rows, syscall.UTF16ToString(buffer[:]))
+	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.titleOrder)
 	sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 0)
 	if len(w.shown) > 0 {
 		sendMessage.Call(w.list, 0x1013, 0, 0) // LVM_ENSUREVISIBLE
@@ -222,7 +234,9 @@ func (w *catalogWindow) catalogStatus(scanning bool) {
 func (w *catalogWindow) load(paths []string, folder string) {
 	w.rows = nil
 	w.shown = nil
-	w.scanIssues = nil
+	w.scanIssues, w.conversionIssues = nil, nil
+	w.filter = allSongs
+	sendMessage.Call(w.statusFilter, 0x14e, 0, 0) // CB_SETCURSEL
 	if report.handle != 0 {
 		user32.NewProc("DestroyWindow").Call(report.handle)
 	}
@@ -237,7 +251,10 @@ func (w *catalogWindow) load(paths []string, folder string) {
 		var issues []scanIssue
 		visit := func(path string) {
 			entry, err := songInfo(path)
+			entry.status = uncheckedSong
+			entry.state = "ยังไม่ตรวจ"
 			if err != nil {
+				entry.status = skippedSong
 				entry.state = err.Error()
 				issues = append(issues, scanIssue{"อ่านไฟล์เพลง", path, err.Error()})
 			}
@@ -282,6 +299,10 @@ func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool)
 	}
 	w.setBusy(true)
 	w.converting = true
+	w.conversionIssues = nil
+	if report.handle != 0 {
+		user32.NewProc("DestroyWindow").Call(report.handle)
+	}
 	w.totalTasks = len(indices)
 	w.success, w.failures = 0, 0
 	w.statusText("กำลังแปลงเพลง…")
@@ -380,14 +401,18 @@ func (w *catalogWindow) poll() {
 			}
 			if w.converting {
 				changed = true
-				w.rows[event.index].state = event.result
+				row := &w.rows[event.index]
+				row.state = event.result
 				if event.result == "" {
-					w.rows[event.index].state = "แปลงแล้ว"
+					row.status = successfulSong
+					row.state = "แปลงแล้ว"
 					if event.code != "" {
 						w.rows[event.index].state += " (" + event.code + ")"
 					}
 					w.success++
 				} else {
+					row.status = skippedSong
+					w.conversionIssues = append(w.conversionIssues, scanIssue{"ข้ามการแปลง", row.path, event.result})
 					w.failures++
 				}
 			} else {
@@ -402,6 +427,9 @@ func (w *catalogWindow) poll() {
 		}
 	}
 refreshed:
+	if done {
+		w.applySearch()
+	}
 	if len(w.rows) != oldCount {
 		sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 2)
 	}
@@ -410,7 +438,7 @@ refreshed:
 	}
 	if w.converting {
 		if changed || done {
-			w.statusText(fmt.Sprintf("แปลงสำเร็จ %d จาก %d เพลง   |   มีข้อผิดพลาด %d",
+			w.statusText(fmt.Sprintf("แปลงสำเร็จ %d จาก %d เพลง   |   ข้าม %d",
 				w.success, w.totalTasks, w.failures))
 		}
 	} else if len(w.rows) != oldCount || done {
@@ -460,10 +488,16 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			ui.startConversion(hwnd, ui.selection(), true)
 		case idVisible:
 			ui.startConversion(hwnd, ui.shown, true)
-		case idScanReport:
-			if len(ui.scanIssues) > 0 {
-				showScanReport(hwnd, ui.scanIssues)
+		case idStatusFilter:
+			if uint16(wParam>>16) == 1 { // CBN_SELCHANGE
+				selected, _, _ := sendMessage.Call(ui.statusFilter, 0x147, 0, 0) // CB_GETCURSEL
+				if selected <= uintptr(uncheckedSong) {
+					ui.filter = songStatus(selected)
+					ui.applySearch()
+				}
 			}
+		case idScanReport:
+			showScanReport(hwnd, ui.scanIssues, ui.conversionIssues)
 		case idConvert:
 			ui.startConversion(hwnd, matchingSongs(ui.rows, ""), false)
 		}
@@ -478,6 +512,16 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			header := (*notifyHeader)(unsafe.Pointer(lParam))
 			if header.Window == ui.list {
 				switch header.Code {
+				case ^uint32(107): // LVN_COLUMNCLICK
+					notification := (*listNotification)(unsafe.Pointer(lParam))
+					if ui.updates == nil && notification.SubItem == 0 {
+						if ui.titleOrder == 1 {
+							ui.titleOrder = -1
+						} else {
+							ui.titleOrder = 1
+						}
+						ui.applySearch()
+					}
 				case lvnGetDispInfoW:
 					provideListText((*displayInfo)(unsafe.Pointer(lParam)))
 					return 0
@@ -543,16 +587,22 @@ func main() {
 	ui.startCode = makeControl(handle, "EDIT", "", 0x810080, idStartCode, instance)
 	ui.codeHint = makeControl(handle, "STATIC", "เว้นว่างเพื่อใช้รหัสเดิม หรือใส่ 0001 / A0001 เพื่อรันเลข", 0, 113, instance)
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
-	ui.reportButton = makeControl(handle, "BUTTON", "รายงานการสแกน", 0x10000, idScanReport, instance)
+	ui.statusLabel = makeControl(handle, "STATIC", "สถานะ", 0, 116, instance)
+	ui.statusFilter = makeControl(handle, "COMBOBOX", "", 0x210003, idStatusFilter, instance)
+	ui.reportButton = makeControl(handle, "BUTTON", "รายงานปัญหา", 0x10000, idScanReport, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
 	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
-		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status, ui.reportButton}
+		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status, ui.reportButton, ui.statusLabel, ui.statusFilter}
 	for _, control := range widgets {
 		if control == 0 {
 			message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
 			return
 		}
 	}
+	for _, label := range []string{"ทั้งหมด", "ผ่าน / แปลงแล้ว", "มีปัญหา", "ยังไม่ตรวจ"} {
+		sendMessage.Call(ui.statusFilter, 0x143, 0, uintptr(unsafe.Pointer(wide(label)))) // CB_ADDSTRING
+	}
+	sendMessage.Call(ui.statusFilter, 0x14e, 0, 0)
 	sendMessage.Call(ui.startCode, 0xc5, 64, 0)
 	sendMessage.Call(ui.search, 0xc5, 1024, 0) // EM_SETLIMITTEXT
 

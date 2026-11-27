@@ -110,13 +110,18 @@ func readKAR(data []byte, metadataOnly bool) (map[string][]byte, error) {
 
 func readKARTrack(data []byte) (karTrack, error) {
 	var track karTrack
+	err := walkMIDITrack(data, track.addMeta, false)
+	return track, err
+}
+
+func walkMIDITrack(data []byte, onMeta func(byte, uint64, []byte), strict bool) error {
 	var tick uint64
 	var status byte
 	invalid := errors.New("ข้อมูลเหตุการณ์ MIDI ไม่ครบหรือมีรูปแบบไม่ถูกต้อง")
 	for len(data) != 0 {
 		delta, n := karVLQ(data)
 		if n == 0 || n >= len(data) {
-			return track, invalid
+			return invalid
 		}
 		tick += uint64(delta)
 		data = data[n:]
@@ -131,7 +136,7 @@ func readKARTrack(data []byte) (karTrack, error) {
 			var subtype byte
 			if kind == 0xff {
 				if len(data) == 0 {
-					return track, invalid
+					return invalid
 				}
 				subtype, data = data[0], data[1:]
 			} else {
@@ -139,7 +144,7 @@ func readKARTrack(data []byte) (karTrack, error) {
 			}
 			length, n := karVLQ(data)
 			if n == 0 || int(length) > len(data)-n {
-				return track, invalid
+				return invalid
 			}
 			payload := data[n : n+int(length)]
 			data = data[n+int(length):]
@@ -147,9 +152,14 @@ func readKARTrack(data []byte) (karTrack, error) {
 				continue
 			}
 			if subtype == 0x2f {
-				return track, nil
+				if strict && (len(payload) != 0 || len(data) != 0) {
+					return invalid
+				}
+				return nil
 			}
-			track.addMeta(subtype, tick, payload)
+			if onMeta != nil {
+				onMeta(subtype, tick, payload)
+			}
 		case kind >= 0x80 && kind < 0xf0:
 			status = kind
 			n = 2
@@ -157,14 +167,14 @@ func readKARTrack(data []byte) (karTrack, error) {
 				n = 1
 			}
 			if len(data) < n || data[0] >= 0x80 || (n == 2 && data[1] >= 0x80) {
-				return track, invalid
+				return invalid
 			}
 			data = data[n:]
 		default:
-			return track, invalid
+			return invalid
 		}
 	}
-	return track, nil
+	return nil
 }
 
 func karVLQ(data []byte) (uint32, int) {

@@ -12,7 +12,7 @@ import (
 func TestXSTMConversion(t *testing.T) {
 	// Original synthetic song data, so the test needs no karaoke files.
 	midi := []byte("MThd\x00\x00\x00\x06\x00\x00\x00\x01\x00\x60MTrk\x00\x00\x00\x04\x00\xff\x2f\x00")
-	lyrics := []byte("\xe0\xbe\xc5\xa7\r\nTest artist\r\nC\r\n")
+	lyrics := []byte("\xe0\xbe\xc5\xa7\r\nTest artist\r\nC\r\n\r\nTest lyric\r\n")
 	cursor := []byte{0, 0, 2, 0}
 	header := []byte("SIGNATURE=EMK\r\nVERSION=2.0\r\n")
 	info := []byte("TITLE=\xe0\xbe\xc5\xa7\r\nARTIST=Test artist\r\n")
