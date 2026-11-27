@@ -18,6 +18,7 @@ var key = [...]byte{0xaf, 0xf2, 0x4c, 0x9c, 0xe9, 0xea, 0x99, 0x43}
 
 var extensions = map[string]string{
 	"MIDI_DATA":   ".mid",
+	"KAR_DATA":    "KAR_DATA",
 	"LYRIC_DATA":  ".lyr",
 	"CURSOR_DATA": ".cur",
 	"CUR_DATA":    ".cur",
@@ -151,12 +152,46 @@ func readParts(file io.Reader, metadataOnly bool) (map[string][]byte, error) {
 	if metadataOnly {
 		return parts, nil
 	}
-	if len(parts) != 3 {
-		return nil, errors.New("ไฟล์ EMK มีข้อมูล MIDI เนื้อร้อง หรือจังหวะไม่ครบ")
+	return completeSFDS(parts)
+}
+
+func completeSFDS(parts map[string][]byte) (map[string][]byte, error) {
+	embeddedKAR := parts["KAR_DATA"]
+	delete(parts, "KAR_DATA")
+	if len(parts[".mid"]) == 0 {
+		parts[".mid"] = embeddedKAR
+	}
+	if len(parts[".mid"]) == 0 {
+		return nil, errors.New("ไฟล์ EMK ไม่มีข้อมูล MIDI")
 	}
 	if err := restoreMIDIHeader(parts[".mid"]); err != nil {
 		return nil, err
 	}
+	lyrics, haveLyrics := parts[".lyr"]
+	cursor, haveCursor := parts[".cur"]
+	if haveLyrics && haveCursor && len(lyrics) != 0 && len(cursor) != 0 {
+		return parts, nil
+	}
+
+	// Generate lyrics and cursor together from timed MIDI events so the two
+	// outputs describe the same text and position for every character.
+	recovered, err := readKAR(parts[".mid"], false)
+	if err != nil && len(embeddedKAR) != 0 {
+		if restoreErr := restoreMIDIHeader(embeddedKAR); restoreErr == nil {
+			recovered, err = readKAR(embeddedKAR, false)
+		}
+	}
+	if err != nil {
+		missing := ".lyr และ .cur"
+		switch {
+		case len(lyrics) != 0:
+			missing = ".cur"
+		case len(cursor) != 0:
+			missing = ".lyr"
+		}
+		return nil, fmt.Errorf("ไฟล์ EMK ขาด %s และกู้จาก MIDI ไม่ได้: %w", missing, err)
+	}
+	parts[".lyr"], parts[".cur"] = recovered[".lyr"], recovered[".cur"]
 	return parts, nil
 }
 
@@ -166,7 +201,11 @@ func restoreMIDIHeader(midi []byte) error {
 	}
 	signature := midi[:min(len(midi), 4)]
 	invalidHeader := fmt.Errorf("ไม่รู้จักหัวไฟล์ MIDI (% X)", signature)
-	if len(midi) < 22 || binary.BigEndian.Uint32(midi[4:8]) != 6 {
+	if len(midi) < 22 {
+		return invalidHeader
+	}
+	headerSize := binary.BigEndian.Uint32(midi[4:8])
+	if headerSize < 6 || uint64(headerSize) > uint64(len(midi)-8) {
 		return invalidHeader
 	}
 	format := binary.BigEndian.Uint16(midi[8:10])
@@ -182,27 +221,42 @@ func restoreMIDIHeader(midi []byte) error {
 		}
 	}
 
-	position := 14
+	position := 8 + int(headerSize)
 	legacySignature := string(signature) == "zxio" || string(signature) == "OOn\xac"
-	for range tracks {
-		if position+8 > len(midi) || string(midi[position:position+4]) != "MTrk" {
-			return fmt.Errorf("โครงสร้างแทร็ก MIDI ไม่ถูกต้อง (หัว % X)", signature)
+	var alternateTracks []int
+	actual := 0
+	for position+8 <= len(midi) {
+		name := string(midi[position : position+4])
+		standard := name == "MTrk"
+		if !standard && actual >= int(tracks) {
+			break
 		}
 		size := binary.BigEndian.Uint32(midi[position+4 : position+8])
-		if uint64(size) > uint64(len(midi)-position-8) {
+		start := position + 8
+		if uint64(size) > uint64(len(midi)-start) {
 			return fmt.Errorf("แทร็ก MIDI ถูกตัดขาด (หัว % X)", signature)
 		}
-		start := position + 8
-		position = start + int(size)
-		// For an unrecognized signature, require a standard end-of-track
-		// event as additional evidence that this is a MIDI track.
-		if !legacySignature && !bytes.HasSuffix(midi[start:position], []byte{0xff, 0x2f, 0}) {
-			return fmt.Errorf("ไม่พบจุดจบแทร็ก MIDI (หัว % X)", signature)
+		end := start + int(size)
+		if (!standard || !legacySignature) && !bytes.HasSuffix(midi[start:end], []byte{0xff, 0x2f, 0}) {
+			return fmt.Errorf("โครงสร้างแทร็ก MIDI ไม่ถูกต้อง (หัว % X, ตำแหน่ง %d)", signature, position)
 		}
+		if !standard {
+			if _, err := readKARTrack(midi[start:end]); err != nil {
+				return fmt.Errorf("อ่านแทร็ก MIDI ที่มีหัว % X ไม่ได้: %w", midi[position:position+4], err)
+			}
+			alternateTracks = append(alternateTracks, position)
+		}
+		actual++
+		position = end
 	}
-	if position != len(midi) {
-		return fmt.Errorf("ขนาดข้อมูลแทร็ก MIDI ไม่ตรงกับหัวไฟล์ (% X)", signature)
+	if actual == 0 || actual > 65535 || (format == 0 && actual != 1) ||
+		(actual < int(tracks) && position != len(midi)) {
+		return fmt.Errorf("พบแทร็ก MIDI สมบูรณ์ %d จาก %d แทร็ก (หัว % X)", actual, tracks, signature)
 	}
+	for _, offset := range alternateTracks {
+		copy(midi[offset:offset+4], "MTrk")
+	}
+	binary.BigEndian.PutUint16(midi[10:12], uint16(actual))
 	copy(midi[:4], "MThd")
 	return nil
 }
