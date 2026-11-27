@@ -1,0 +1,103 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"syscall"
+	"unsafe"
+)
+
+type scanIssue struct {
+	operation, path, reason string
+}
+
+var report struct {
+	registered         bool
+	handle, edit, copy uintptr
+}
+
+const idCopyScanReport = 201
+
+func showScanReport(owner uintptr, issues []scanIssue) {
+	showWindow := user32.NewProc("ShowWindow")
+	activate := user32.NewProc("SetForegroundWindow")
+	if report.handle != 0 {
+		showWindow.Call(report.handle, 9) // SW_RESTORE
+		activate.Call(report.handle)
+		return
+	}
+	instance, _, _ := moduleHandle.Call(0)
+	className := wide("2NCNScanReportWindow")
+	if !report.registered {
+		cursor, _, _ := user32.NewProc("LoadCursorW").Call(0, 32512)
+		class := windowClass{
+			Proc: syscall.NewCallback(scanReportProc), Instance: instance,
+			Cursor: cursor, Background: 16, Name: className,
+		}
+		if registered, _, err := user32.NewProc("RegisterClassW").Call(uintptr(unsafe.Pointer(&class))); registered == 0 {
+			message(owner, err.Error(), 0x10)
+			return
+		}
+		report.registered = true
+	}
+
+	var content strings.Builder
+	fmt.Fprintf(&content, "อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ\r\n\r\n", len(issues))
+	for i, issue := range issues {
+		fmt.Fprintf(&content, "%d. %s\r\n%s\r\n%s\r\n\r\n", i+1, issue.operation, issue.path, issue.reason)
+	}
+	title := wide("2NCN — รายงานข้อผิดพลาดจากการสแกน")
+	const defaultPosition = 0x80000000
+	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
+		0x00cf0000, defaultPosition, defaultPosition, 900, 570, owner, 0, instance, 0)
+	if handle == 0 {
+		message(owner, err.Error(), 0x10)
+		return
+	}
+
+	report.handle = handle
+	report.edit = makeControl(handle, "EDIT", "", 0x00a10844, 200, instance)
+	report.copy = makeControl(handle, "BUTTON", "คัดลอกทั้งหมด", 0x10000, idCopyScanReport, instance)
+	if report.edit == 0 || report.copy == 0 {
+		user32.NewProc("DestroyWindow").Call(handle)
+		message(owner, "เปิดรายงานข้อผิดพลาดไม่ได้", 0x10)
+		return
+	}
+	font, _, _ := sendMessage.Call(ui.search, 0x31, 0, 0)      // WM_GETFONT
+	editFont, _, _ := gdi32.NewProc("GetStockObject").Call(17) // DEFAULT_GUI_FONT
+	sendMessage.Call(report.edit, wmSetFont, editFont, 1)
+	sendMessage.Call(report.copy, wmSetFont, font, 1)
+	sendMessage.Call(report.edit, 0xc5, 0x7ffffffe, 0) // EM_SETLIMITTEXT
+	setWindowText.Call(report.edit, uintptr(unsafe.Pointer(wide(content.String()))))
+	var rect [4]int32
+	user32.NewProc("GetClientRect").Call(handle, uintptr(unsafe.Pointer(&rect[0])))
+	layoutScanReport(int(rect[2]), int(rect[3]))
+	showWindow.Call(handle, 5)
+	activate.Call(handle)
+	user32.NewProc("SetFocus").Call(report.edit)
+}
+
+func layoutScanReport(width, height int) {
+	moveWindow.Call(report.copy, 12, 12, 145, 30, 1)
+	moveWindow.Call(report.edit, 12, 52, uintptr(max(width-24, 0)), uintptr(max(height-64, 0)), 1)
+}
+
+func scanReportProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case wmSize:
+		if report.edit != 0 {
+			layoutScanReport(int(uint16(lParam)), int(uint16(lParam>>16)))
+		}
+	case wmCommand:
+		if uint16(wParam) == idCopyScanReport {
+			sendMessage.Call(report.edit, 0xb1, 0, ^uintptr(0)) // EM_SETSEL
+			sendMessage.Call(report.edit, 0x301, 0, 0)          // WM_COPY
+			return 0
+		}
+	case wmDestroy:
+		report.handle, report.edit, report.copy = 0, 0, 0
+		return 0
+	}
+	result, _, _ := defWindowProc.Call(hwnd, msg, wParam, lParam)
+	return result
+}

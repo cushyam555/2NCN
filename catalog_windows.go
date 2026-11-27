@@ -24,6 +24,7 @@ const (
 	idSelected          = 108
 	idVisible           = 109
 	idStartCode         = 111
+	idScanReport        = 114
 	wmContextMenu       = 0x7b
 	lvmGetNextItem      = 0x100c
 	lvmSubItemHitTest   = 0x1039
@@ -99,7 +100,7 @@ type update struct {
 	result   string
 	code     string
 	complete bool
-	problems int
+	issues   []scanIssue
 }
 
 type catalogWindow struct {
@@ -107,7 +108,9 @@ type catalogWindow struct {
 	searchLabel, search, clear, selected, visible uintptr
 	codeLabel, startCode, codeHint                uintptr
 	shown                                         []int
-	totalTasks, scanProblems                      int
+	totalTasks                                    int
+	scanIssues                                    []scanIssue
+	reportButton                                  uintptr
 	rows                                          []song
 	updates                                       <-chan update
 	converting                                    bool
@@ -128,6 +131,7 @@ func (w *catalogWindow) layout(width, height int) {
 	moveWindow.Call(w.selected, 318, 12, 160, 30, 1)
 	moveWindow.Call(w.visible, 486, 12, 170, 30, 1)
 	moveWindow.Call(w.convert, 664, 12, 170, 30, 1)
+	moveWindow.Call(w.reportButton, 842, 12, 160, 30, 1)
 	moveWindow.Call(w.searchLabel, 12, 55, 250, 26, 1)
 	moveWindow.Call(w.search, 265, 50, uintptr(max(width-372, 0)), 30, 1)
 	moveWindow.Call(w.clear, uintptr(max(width-97, 265)), 50, 85, 30, 1)
@@ -148,6 +152,7 @@ func (w *catalogWindow) setBusy(busy bool) {
 	enableWindow.Call(w.search, enabled(!busy))
 	enableWindow.Call(w.clear, enabled(!busy))
 	enableWindow.Call(w.startCode, enabled(!busy))
+	enableWindow.Call(w.reportButton, enabled(!busy && len(w.scanIssues) > 0))
 	w.updateActions(busy)
 }
 
@@ -208,8 +213,8 @@ func (w *catalogWindow) catalogStatus(scanning bool) {
 	text := fmt.Sprintf("แสดง %d จาก %d เพลง", len(w.shown), len(w.rows))
 	if scanning {
 		text += "  |  กำลังอ่านรายการ…"
-	} else if w.scanProblems > 0 {
-		text += fmt.Sprintf("  |  อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ", w.scanProblems)
+	} else if len(w.scanIssues) > 0 {
+		text += fmt.Sprintf("  |  อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ", len(w.scanIssues))
 	}
 	w.statusText(text)
 }
@@ -217,7 +222,10 @@ func (w *catalogWindow) catalogStatus(scanning bool) {
 func (w *catalogWindow) load(paths []string, folder string) {
 	w.rows = nil
 	w.shown = nil
-	w.scanProblems = 0
+	w.scanIssues = nil
+	if report.handle != 0 {
+		user32.NewProc("DestroyWindow").Call(report.handle)
+	}
 	setWindowText.Call(w.search, uintptr(unsafe.Pointer(wide(""))))
 	w.success, w.failures = 0, 0
 	sendMessage.Call(w.list, lvmSetItemCount, 0, 0)
@@ -226,23 +234,25 @@ func (w *catalogWindow) load(paths []string, folder string) {
 	updates := make(chan update, 256)
 	w.updates = updates
 	go func() {
-		problems := 0
+		var issues []scanIssue
 		visit := func(path string) {
 			entry, err := songInfo(path)
 			if err != nil {
 				entry.state = err.Error()
-				problems++
+				issues = append(issues, scanIssue{"อ่านไฟล์เพลง", path, err.Error()})
 			}
 			updates <- update{entry: entry}
 		}
 		if folder != "" {
-			scanSongs(folder, visit, func(_ string, _ error) { problems++ })
+			scanSongs(folder, visit, func(path string, err error) {
+				issues = append(issues, scanIssue{"สำรวจเส้นทาง", path, err.Error()})
+			})
 		} else {
 			for _, path := range paths {
 				visit(path)
 			}
 		}
-		updates <- update{complete: true, problems: problems}
+		updates <- update{complete: true, issues: issues}
 	}()
 }
 
@@ -356,12 +366,15 @@ func (w *catalogWindow) poll() {
 	}
 	oldCount := len(w.rows)
 	changed := false
-	done, problems := false, 0
+	done := false
 	for range 256 {
 		select {
 		case event := <-w.updates:
 			if event.complete {
-				done, problems = true, event.problems
+				done = true
+				if !w.converting {
+					w.scanIssues = event.issues
+				}
 				w.updates = nil
 				break
 			}
@@ -401,9 +414,6 @@ refreshed:
 				w.success, w.totalTasks, w.failures))
 		}
 	} else if len(w.rows) != oldCount || done {
-		if done {
-			w.scanProblems = problems
-		}
 		w.catalogStatus(!done)
 	}
 	if done {
@@ -450,6 +460,10 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			ui.startConversion(hwnd, ui.selection(), true)
 		case idVisible:
 			ui.startConversion(hwnd, ui.shown, true)
+		case idScanReport:
+			if len(ui.scanIssues) > 0 {
+				showScanReport(hwnd, ui.scanIssues)
+			}
 		case idConvert:
 			ui.startConversion(hwnd, matchingSongs(ui.rows, ""), false)
 		}
@@ -529,9 +543,10 @@ func main() {
 	ui.startCode = makeControl(handle, "EDIT", "", 0x810080, idStartCode, instance)
 	ui.codeHint = makeControl(handle, "STATIC", "เว้นว่างเพื่อใช้รหัสเดิม หรือใส่ 0001 / A0001 เพื่อรันเลข", 0, 113, instance)
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
+	ui.reportButton = makeControl(handle, "BUTTON", "รายงานการสแกน", 0x10000, idScanReport, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
 	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
-		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status}
+		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status, ui.reportButton}
 	for _, control := range widgets {
 		if control == 0 {
 			message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
@@ -606,7 +621,7 @@ func main() {
 					sendMessage.Call(ui.search, 0xb1, 0, ^uintptr(0)) // EM_SETSEL
 					continue
 				case 'A':
-					if msg.Window == ui.search || msg.Window == ui.startCode {
+					if msg.Window == ui.search || msg.Window == ui.startCode || msg.Window == report.edit {
 						sendMessage.Call(msg.Window, 0xb1, 0, ^uintptr(0))
 						continue
 					}
