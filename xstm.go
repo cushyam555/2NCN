@@ -23,8 +23,24 @@ func readXSTM(data []byte, metadataOnly bool) (map[string][]byte, error) {
 		return nil, errors.New("ส่วนหัว XSTM ถูกตัดขาด")
 	}
 	blocks := data[xstmHeaderSize+prefixSize:]
+	if len(blocks) < 2 {
+		return nil, errors.New("บล็อก XSTM ถูกตัดขาด")
+	}
+
+	// Some XSTM writers use the same block key as SFDS.
+	var blockKey [8]byte
+	for _, candidate := range [...][8]byte{xstmKey, key} {
+		method, flags := blocks[0]^candidate[0], blocks[1]^candidate[1]
+		if method&0x0f == 8 && method>>4 <= 7 && (uint16(method)<<8|uint16(flags))%31 == 0 {
+			blockKey = candidate
+			break
+		}
+	}
+	if blockKey == ([8]byte{}) {
+		return nil, errors.New("หัวบล็อก XSTM ไม่ตรงกับรูปแบบที่รองรับ")
+	}
 	for i := range blocks {
-		blocks[i] ^= xstmKey[i%len(xstmKey)]
+		blocks[i] ^= blockKey[i%len(blockKey)]
 	}
 	reader := bytes.NewReader(blocks)
 	parts := make(map[string][]byte, 4)

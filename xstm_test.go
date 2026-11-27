@@ -32,38 +32,44 @@ func TestXSTMConversion(t *testing.T) {
 		}
 	}
 
-	prefix := []byte("XSTM\x01\x00\x00\x00\x00\x00\x0b\x0012345678901")
-	data := append(prefix, blocks.Bytes()...)
-	testKey := [8]byte{0x2c, 0x33, 0x79, 0x92, 0x16, 0x75, 0x83, 0x43}
-	for i := len(prefix); i < len(data); i++ {
-		data[i] ^= testKey[(i-len(prefix))%8]
-	}
-	root := t.TempDir()
-	input := filepath.Join(root, "synthetic.emk")
-	if err := os.WriteFile(input, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	song, err := songInfo(input)
-	if err != nil || song.title != "เพลง" || song.artist != "Test artist" || song.version != "2.0 (XSTM)" {
-		t.Fatalf("unexpected catalog entry %+v: %v", song, err)
-	}
-	if err := convert(input, root); err != nil {
-		t.Fatal(err)
-	}
-	for suffix, expected := range map[string][]byte{".mid": midi, ".lyr": lyrics, ".cur": cursor} {
-		got, err := os.ReadFile(filepath.Join(root, "synthetic", "synthetic"+suffix))
-		if err != nil || !bytes.Equal(got, expected) {
-			t.Errorf("unexpected %s output: %v", suffix, err)
-		}
-	}
+	for name, testKey := range map[string][8]byte{
+		"original XSTM":    {0x2c, 0x33, 0x79, 0x92, 0x16, 0x75, 0x83, 0x43},
+		"SFDS key in XSTM": {0xaf, 0xf2, 0x4c, 0x9c, 0xe9, 0xea, 0x99, 0x43},
+	} {
+		t.Run(name, func(t *testing.T) {
+			prefix := []byte("XSTM\x01\x00\x00\x00\x00\x00\x0b\x0012345678901")
+			data := append(prefix, blocks.Bytes()...)
+			for i := len(prefix); i < len(data); i++ {
+				data[i] ^= testKey[(i-len(prefix))%8]
+			}
+			root := t.TempDir()
+			input := filepath.Join(root, "synthetic.emk")
+			if err := os.WriteFile(input, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			song, err := songInfo(input)
+			if err != nil || song.title != "เพลง" || song.artist != "Test artist" || song.version != "2.0 (XSTM)" {
+				t.Fatalf("unexpected catalog entry %+v: %v", song, err)
+			}
+			if err := convert(input, root); err != nil {
+				t.Fatal(err)
+			}
+			for suffix, expected := range map[string][]byte{".mid": midi, ".lyr": lyrics, ".cur": cursor} {
+				got, err := os.ReadFile(filepath.Join(root, "synthetic", "synthetic"+suffix))
+				if err != nil || !bytes.Equal(got, expected) {
+					t.Errorf("unexpected %s output: %v", suffix, err)
+				}
+			}
 
-	invalidOffset := bytes.Clone(data)
-	binary.LittleEndian.PutUint16(invalidOffset[10:12], 0xffff)
-	unsupportedVersion := bytes.Clone(data)
-	unsupportedVersion[4] = 2
-	for _, invalid := range [][]byte{invalidOffset, unsupportedVersion, data[:len(data)-1], append(bytes.Clone(data), 0)} {
-		if _, err := unpack(bytes.NewReader(invalid)); err == nil {
-			t.Fatal("invalid XSTM accepted")
-		}
+			invalidOffset := bytes.Clone(data)
+			binary.LittleEndian.PutUint16(invalidOffset[10:12], 0xffff)
+			unsupportedVersion := bytes.Clone(data)
+			unsupportedVersion[4] = 2
+			for _, invalid := range [][]byte{invalidOffset, unsupportedVersion, data[:len(data)-1], append(bytes.Clone(data), 0)} {
+				if _, err := unpack(bytes.NewReader(invalid)); err == nil {
+					t.Fatal("invalid XSTM accepted")
+				}
+			}
+		})
 	}
 }
