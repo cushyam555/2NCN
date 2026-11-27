@@ -22,7 +22,7 @@ func TestScanSongsNested(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{filepath.Join(root, "one.EMK"), filepath.Join(child, "two.SMD")}
-	for _, path := range append(append([]string(nil), want...), filepath.Join(child, "skip.mid")) {
+	for _, path := range append(append([]string(nil), want...), filepath.Join(child, "skip.txt")) {
 		if err := os.WriteFile(path, nil, 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +37,7 @@ func TestScanSongsNested(t *testing.T) {
 		{".kar", nil},
 	} {
 		var got []string
-		scanSongs(root, tc.extension, func(path string) { got = append(got, path) },
+		scanSongs(root, tc.extension, func(path string) { got = append(got, path) }, func(ncnSet) { t.Error("unexpected NCN set") },
 			func(path string, err error) { t.Errorf("scan %s: %v", path, err) })
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("scan %q = %v, want %v", tc.extension, got, tc.want)

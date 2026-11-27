@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,38 +110,25 @@ func inspectNCN(set ncnSet) (song, error) {
 	return entry, nil
 }
 
-func scanNCNSets(folder string, visit func(ncnSet), failed func(string, error)) {
-	sets := make(map[string]*ncnSet)
-	var ordered []*ncnSet
-	filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			failed(path, err)
-			return nil
-		}
-		component := ncnComponent(path)
-		if !entry.Type().IsRegular() || component < 0 {
-			return nil
-		}
-		relative, err := filepath.Rel(folder, path)
-		if err != nil {
-			failed(path, err)
-			return nil
-		}
-		key := ncnSetKey(relative)
-		set := sets[key]
-		if set == nil {
-			set = &ncnSet{code: sourceFileCode(path)}
-			sets[key] = set
-			ordered = append(ordered, set)
-		}
-		if set.paths[component] != "" {
-			set.duplicates = append(set.duplicates, path)
-		} else {
-			set.paths[component] = path
-		}
-		return nil
-	})
-	for _, set := range ordered {
-		visit(*set)
+type ncnSets struct {
+	byKey   map[string]*ncnSet
+	ordered []*ncnSet
+}
+
+func (sets *ncnSets) add(relative, path string, component int) {
+	if sets.byKey == nil {
+		sets.byKey = make(map[string]*ncnSet)
+	}
+	key := ncnSetKey(relative)
+	set := sets.byKey[key]
+	if set == nil {
+		set = &ncnSet{code: sourceFileCode(path)}
+		sets.byKey[key] = set
+		sets.ordered = append(sets.ordered, set)
+	}
+	if set.paths[component] != "" {
+		set.duplicates = append(set.duplicates, path)
+	} else {
+		set.paths[component] = path
 	}
 }

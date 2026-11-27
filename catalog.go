@@ -97,18 +97,34 @@ func matchesSongExtension(path, extension string) bool {
 	return extension == "" || strings.EqualFold(filepath.Ext(path), extension)
 }
 
-func scanSongs(folder, extension string, visit func(string), failed func(string, error)) {
+func scanSongs(folder, extension string, visit func(string), visitNCN func(ncnSet), failed func(string, error)) {
+	var sets ncnSets
+	includeNCN := extension == "" || extension == ncnExtension
 	filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			failed(path, err)
 			return nil
 		}
-		if entry.Type().IsRegular() && supportedSongPath(path) &&
-			matchesSongExtension(path, extension) {
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		if supportedSongPath(path) && matchesSongExtension(path, extension) {
 			visit(path)
+		} else if includeNCN {
+			if component := ncnComponent(path); component >= 0 {
+				relative, err := filepath.Rel(folder, path)
+				if err != nil {
+					failed(path, err)
+					return nil
+				}
+				sets.add(relative, path, component)
+			}
 		}
 		return nil
 	})
+	for _, set := range sets.ordered {
+		visitNCN(*set)
+	}
 }
 
 // Each search term can match a different field.

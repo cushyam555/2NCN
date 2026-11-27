@@ -285,15 +285,10 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 			failed := func(path string, err error) {
 				issues = append(issues, scanIssue{operation: "สำรวจเส้นทาง", path: path, reason: err.Error()})
 			}
-			if extension != ncnExtension {
-				scanSongs(folder, extension, visit, failed)
-			}
-			if extension == ncnExtension {
-				scanNCNSets(folder, func(set ncnSet) {
-					entry, err := inspectNCN(set)
-					record(entry, "ตรวจชุด NCN", err)
-				}, failed)
-			}
+			scanSongs(folder, extension, visit, func(set ncnSet) {
+				entry, err := inspectNCN(set)
+				record(entry, "ตรวจชุด NCN", err)
+			}, failed)
 		} else {
 			for _, path := range paths {
 				visit(path)

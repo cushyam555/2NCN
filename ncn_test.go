@@ -28,7 +28,7 @@ func TestScanNCNLibrary(t *testing.T) {
 	}
 
 	var rows []song
-	scanNCNSets(root, func(set ncnSet) {
+	scanSongs(root, ncnExtension, func(path string) { t.Errorf("unexpected package %s", path) }, func(set ncnSet) {
 		entry, _ := inspectNCN(set)
 		rows = append(rows, entry)
 	}, func(path string, err error) {
@@ -56,5 +56,50 @@ func TestScanNCNLibrary(t *testing.T) {
 	}
 	if got := convertibleIndices(rows, []int{0, 1, 2}); len(got) != 0 {
 		t.Fatalf("NCN sets appeared in convertible rows: %v", got)
+	}
+}
+
+func TestScanNCNFromLibraryRootAndParent(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "NCN")
+	for _, path := range []string{
+		"Cursor/0/001.CUR", "Lyrics/0/001.LYR", "Song/0/001.MID",
+		"Cursor/Z/Z123.cur", "Lyrics/z/Z123.lyr", "Song/Z/Z123.mid",
+		"extra.EMK",
+	} {
+		path = filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, folder := range []string{root, parent} {
+		for _, extension := range []string{ncnExtension, "", ".emk"} {
+			var packages, sets int
+			scanSongs(folder, extension, func(string) {
+				packages++
+			}, func(set ncnSet) {
+				sets++
+				for _, path := range set.paths {
+					if path == "" {
+						t.Errorf("incomplete match for %s from %s", set.code, folder)
+					}
+				}
+			}, func(path string, err error) {
+				t.Errorf("scan %s: %v", path, err)
+			})
+			wantPackages, wantSets := 1, 2
+			if extension == ncnExtension {
+				wantPackages = 0
+			} else if extension == ".emk" {
+				wantSets = 0
+			}
+			if packages != wantPackages || sets != wantSets {
+				t.Errorf("scan %s (%q) returned %d packages, %d sets", folder, extension, packages, sets)
+			}
+		}
 	}
 }
