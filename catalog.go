@@ -138,7 +138,13 @@ func matchesSong(entry song, terms []string) bool {
 	return true
 }
 
-func catalogView(rows []song, query string, status songStatus, titleOrder int) []int {
+const catalogColumnCount = 5
+
+func (entry song) columnText(column int) string {
+	return [catalogColumnCount]string{entry.title, entry.artist, entry.version, entry.path, entry.state}[column]
+}
+
+func catalogView(rows []song, query string, status songStatus, column, order int) []int {
 	matches := matchingSongs(rows, query)
 	if status != allSongs {
 		filtered := matches[:0]
@@ -149,10 +155,10 @@ func catalogView(rows []song, query string, status songStatus, titleOrder int) [
 		}
 		matches = filtered
 	}
-	if titleOrder != 0 {
-		byTitle := collate.New(language.Thai, collate.IgnoreCase)
+	if order != 0 {
+		byText := collate.New(language.Thai, collate.IgnoreCase)
 		sort.SliceStable(matches, func(i, j int) bool {
-			return byTitle.CompareString(rows[matches[i]].title, rows[matches[j]].title)*titleOrder < 0
+			return byText.CompareString(rows[matches[i]].columnText(column), rows[matches[j]].columnText(column))*order < 0
 		})
 	}
 	return matches

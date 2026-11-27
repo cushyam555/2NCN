@@ -58,3 +58,19 @@ func TestMatchingSongs(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogViewSortsByDisplayedColumn(t *testing.T) {
+	rows := []song{
+		{title: "Alpha", artist: "ขวัญ", version: "SMD", path: "b.emk", state: "แปลงแล้ว"},
+		{title: "beta", artist: "กานต์", version: "3.1", path: "A.emk", state: "ข้าม"},
+	}
+	for column, ascending := range [][]int{{0, 1}, {1, 0}, {1, 0}, {1, 0}, {1, 0}} {
+		if got := catalogView(rows, "", allSongs, column, 1); !reflect.DeepEqual(got, ascending) {
+			t.Errorf("column %d ascending = %v, want %v", column, got, ascending)
+		}
+		descending := []int{ascending[1], ascending[0]}
+		if got := catalogView(rows, "", allSongs, column, -1); !reflect.DeepEqual(got, descending) {
+			t.Errorf("column %d descending = %v, want %v", column, got, descending)
+		}
+	}
+}

@@ -119,7 +119,7 @@ type catalogWindow struct {
 	scanIssues, conversionIssues                  []scanIssue
 	statusFilter, statusLabel                     uintptr
 	filter                                        songStatus
-	titleOrder                                    int
+	sortColumn, sortOrder                         int
 	reportButton                                  uintptr
 	rows                                          []song
 	updates                                       <-chan update
@@ -208,7 +208,7 @@ func (w *catalogWindow) applySearch() {
 	var buffer [1025]uint16
 	user32.NewProc("GetWindowTextW").Call(w.search, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
 	w.setSelected(^uintptr(0), false)
-	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.titleOrder)
+	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.sortColumn, w.sortOrder)
 	sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 0)
 	if len(w.shown) > 0 {
 		sendMessage.Call(w.list, 0x1013, 0, 0) // LVM_ENSUREVISIBLE
@@ -518,12 +518,14 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				switch header.Code {
 				case ^uint32(107): // LVN_COLUMNCLICK
 					notification := (*listNotification)(unsafe.Pointer(lParam))
-					if ui.updates == nil && notification.SubItem == 0 {
-						if ui.titleOrder == 1 {
-							ui.titleOrder = -1
+					column := int(notification.SubItem)
+					if ui.updates == nil && column >= 0 && column < catalogColumnCount {
+						if ui.sortColumn == column && ui.sortOrder == 1 {
+							ui.sortOrder = -1
 						} else {
-							ui.titleOrder = 1
+							ui.sortOrder = 1
 						}
+						ui.sortColumn = column
 						ui.applySearch()
 					}
 				case lvnGetDispInfoW:
@@ -544,13 +546,12 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 func provideListText(info *displayInfo) {
 	index, column := int(info.Item), int(info.SubItem)
-	if info.Mask&1 == 0 || index < 0 || index >= len(ui.shown) || column < 0 || column >= 5 ||
+	if info.Mask&1 == 0 || index < 0 || index >= len(ui.shown) || column < 0 || column >= catalogColumnCount ||
 		info.Text == nil || info.TextMax <= 0 {
 		return
 	}
 	entry := ui.rows[ui.shown[index]]
-	columns := [5]string{entry.title, entry.artist, entry.version, entry.path, entry.state}
-	value, _ := syscall.UTF16FromString(strings.ReplaceAll(columns[column], "\x00", "�"))
+	value, _ := syscall.UTF16FromString(strings.ReplaceAll(entry.columnText(column), "\x00", "�"))
 	buffer := unsafe.Slice(info.Text, int(info.TextMax))
 	count := copy(buffer[:len(buffer)-1], value[:len(value)-1])
 	buffer[count] = 0
