@@ -29,6 +29,10 @@ func hasNCNLyrics(data []byte) bool {
 }
 
 func validateMIDI(data []byte) error {
+	return checkMIDI(data, true)
+}
+
+func checkMIDI(data []byte, repairTrackCount bool) error {
 	if len(data) < 14 || string(data[:4]) != "MThd" {
 		return errors.New("หัวไฟล์ MIDI ไม่สมบูรณ์")
 	}
@@ -55,7 +59,7 @@ func validateMIDI(data []byte) error {
 			// Some format-1 files declare one extra track. Only correct the
 			// header when all physical tracks passed validation and the last
 			// track ends exactly at EOF.
-			if len(remaining) == 0 && format == 1 && track == tracks && track > 1 {
+			if repairTrackCount && len(remaining) == 0 && format == 1 && track == tracks && track > 1 {
 				binary.BigEndian.PutUint16(data[10:12], uint16(track-1))
 				return nil
 			}

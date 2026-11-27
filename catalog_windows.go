@@ -121,6 +121,7 @@ type catalogWindow struct {
 	statusFilter, statusLabel                     uintptr
 	scanType, scanTypeLabel                       uintptr
 	extensionFilter                               string
+	hasConvertibleRows, hasConvertibleShown       bool
 	filter                                        songStatus
 	sortColumn, sortOrder                         int
 	reportButton                                  uintptr
@@ -184,9 +185,9 @@ func enabled(value bool) uintptr {
 
 func (w *catalogWindow) updateActions(busy bool) {
 	selected, _, _ := sendMessage.Call(w.list, lvmGetSelectedCount, 0, 0)
-	enableWindow.Call(w.selected, enabled(!busy && selected != 0))
-	enableWindow.Call(w.visible, enabled(!busy && len(w.shown) != 0))
-	enableWindow.Call(w.convert, enabled(!busy && len(w.rows) != 0))
+	enableWindow.Call(w.selected, enabled(!busy && selected != 0 && w.hasConvertibleShown))
+	enableWindow.Call(w.visible, enabled(!busy && w.hasConvertibleShown))
+	enableWindow.Call(w.convert, enabled(!busy && w.hasConvertibleRows))
 }
 
 func (w *catalogWindow) selection() []int {
@@ -215,6 +216,13 @@ func (w *catalogWindow) applySearch() {
 	user32.NewProc("GetWindowTextW").Call(w.search, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
 	w.setSelected(^uintptr(0), false)
 	w.shown = catalogView(w.rows, syscall.UTF16ToString(buffer[:]), w.filter, w.extensionFilter, w.sortColumn, w.sortOrder)
+	w.hasConvertibleShown = false
+	for _, index := range w.shown {
+		if w.rows[index].version != "NCN" {
+			w.hasConvertibleShown = true
+			break
+		}
+	}
 	sendMessage.Call(w.list, lvmSetItemCount, uintptr(len(w.shown)), 0)
 	if len(w.shown) > 0 {
 		sendMessage.Call(w.list, 0x1013, 0, 0) // LVM_ENSUREVISIBLE
@@ -233,13 +241,14 @@ func (w *catalogWindow) catalogStatus(scanning bool) {
 	if scanning {
 		text += "  |  กำลังอ่านรายการ…"
 	} else if len(w.scanIssues) > 0 {
-		text += fmt.Sprintf("  |  อ่านไฟล์หรือโฟลเดอร์ไม่ได้ %d รายการ", len(w.scanIssues))
+		text += fmt.Sprintf("  |  พบปัญหาจากการสแกน %d รายการ", len(w.scanIssues))
 	}
 	w.statusText(text)
 }
 
 func (w *catalogWindow) load(paths []string, folder, extension string) {
 	w.rows = nil
+	w.hasConvertibleRows = false
 	w.shown = nil
 	w.scanIssues, w.conversionIssues = nil, nil
 	w.filter = allSongs
@@ -256,6 +265,12 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 	w.updates = updates
 	go func() {
 		var issues []scanIssue
+		record := func(entry song, operation string, err error) {
+			if err != nil {
+				issues = append(issues, scanIssue{operation: operation, path: entry.path, reason: err.Error(), songCode: sourceSongCode(entry)})
+			}
+			updates <- update{entry: entry}
+		}
 		visit := func(path string) {
 			entry, err := songInfo(path)
 			entry.status = uncheckedSong
@@ -263,14 +278,22 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 			if err != nil {
 				entry.status = skippedSong
 				entry.state = err.Error()
-				issues = append(issues, scanIssue{operation: "อ่านไฟล์เพลง", path: path, reason: err.Error(), songCode: sourceSongCode(entry)})
 			}
-			updates <- update{entry: entry}
+			record(entry, "อ่านไฟล์เพลง", err)
 		}
 		if folder != "" {
-			scanSongs(folder, extension, visit, func(path string, err error) {
+			failed := func(path string, err error) {
 				issues = append(issues, scanIssue{operation: "สำรวจเส้นทาง", path: path, reason: err.Error()})
-			})
+			}
+			if extension != ncnExtension {
+				scanSongs(folder, extension, visit, failed)
+			}
+			if extension == ncnExtension {
+				scanNCNSets(folder, func(set ncnSet) {
+					entry, err := inspectNCN(set)
+					record(entry, "ตรวจชุด NCN", err)
+				}, failed)
+			}
 		} else {
 			for _, path := range paths {
 				visit(path)
@@ -281,6 +304,7 @@ func (w *catalogWindow) load(paths []string, folder, extension string) {
 }
 
 func (w *catalogWindow) startConversion(owner uintptr, indices []int, flat bool) {
+	indices = convertibleIndices(w.rows, indices)
 	if len(indices) == 0 || w.updates != nil {
 		return
 	}
@@ -371,7 +395,7 @@ func (w *catalogWindow) contextMenu(owner, coords uintptr) {
 			w.setSelected(index, true)
 		}
 	}
-	selected := w.selection()
+	selected := convertibleIndices(w.rows, w.selection())
 	if len(selected) == 0 {
 		return
 	}
@@ -426,10 +450,11 @@ func (w *catalogWindow) poll() {
 					w.failures++
 				}
 			} else {
-				if matchesSongExtension(event.entry.path, w.extensionFilter) {
+				if event.entry.matchesType(w.extensionFilter) {
 					w.shown = append(w.shown, len(w.rows))
 				}
 				w.rows = append(w.rows, event.entry)
+				w.hasConvertibleRows = w.hasConvertibleRows || event.entry.version != "NCN"
 			}
 		default:
 			goto refreshed
@@ -598,7 +623,7 @@ func main() {
 		return
 	}
 	const defaultPosition = 0x80000000
-	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK / SMD / HNK / SIB / KAR"))),
+	handle, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(wide("2NCN — รายการเพลง EMK / SMD / HNK / SIB / KAR / NCN"))),
 		0x00cf0000, defaultPosition, defaultPosition, 1100, 680, 0, 0, instance, 0)
 	if handle == 0 {
 		message(0, err.Error(), 0x10)
@@ -662,7 +687,7 @@ func main() {
 		sendMessage.Call(ui.list, lvmInsertColumnW, uintptr(i), uintptr(unsafe.Pointer(&column)))
 		runtime.KeepAlive(column)
 	}
-	ui.statusText("เลือกไฟล์ EMK / SMD / HNK / SIB / KAR หรือสแกนโฟลเดอร์เพื่อดูรายการเพลง")
+	ui.statusText("เลือกไฟล์ EMK / SMD / HNK / SIB / KAR หรือเลือก NCN แล้วสแกนโฟลเดอร์เพื่อตรวจไฟล์")
 	ui.setBusy(false)
 	var rect [4]int32
 	user32.NewProc("GetClientRect").Call(handle, uintptr(unsafe.Pointer(&rect[0])))

@@ -86,10 +86,11 @@ func songInfo(path string) (song, error) {
 	return entry, nil
 }
 
-var songExtensions = [...]string{".emk", ".smd", ".hnk", ".sib", ".kar"}
+var songExtensions = [...]string{".emk", ".smd", ".hnk", ".sib", ".kar", ncnExtension}
 
 func supportedSongPath(path string) bool {
-	return slices.Contains(songExtensions[:], strings.ToLower(filepath.Ext(path)))
+	extension := strings.ToLower(filepath.Ext(path))
+	return extension != ncnExtension && slices.Contains(songExtensions[:], extension)
 }
 
 func matchesSongExtension(path, extension string) bool {
@@ -127,7 +128,7 @@ func matchesSong(entry song, terms []string) bool {
 		return true
 	}
 	format := entry.version
-	if format != "SMD" && format != "HNK" && format != "SIB" && format != "KAR" {
+	if format != "SMD" && format != "HNK" && format != "SIB" && format != "KAR" && format != "NCN" {
 		format += "\nEMK v" + entry.version
 	}
 	fields := strings.ToLower(strings.Join([]string{
@@ -147,13 +148,30 @@ func (entry song) columnText(column int) string {
 	return [catalogColumnCount]string{entry.title, entry.artist, entry.version, entry.path, entry.state}[column]
 }
 
+func (entry song) matchesType(extension string) bool {
+	if entry.version == "NCN" {
+		return extension == "" || extension == ncnExtension
+	}
+	return matchesSongExtension(entry.path, extension)
+}
+
+func convertibleIndices(rows []song, indices []int) []int {
+	var result []int
+	for _, index := range indices {
+		if rows[index].version != "NCN" {
+			result = append(result, index)
+		}
+	}
+	return result
+}
+
 func catalogView(rows []song, query string, status songStatus, extension string, column, order int) []int {
 	matches := matchingSongs(rows, query)
 	if status != allSongs || extension != "" {
 		filtered := matches[:0]
 		for _, index := range matches {
 			entry := rows[index]
-			if (status == allSongs || entry.status == status) && matchesSongExtension(entry.path, extension) {
+			if (status == allSongs || entry.status == status) && entry.matchesType(extension) {
 				filtered = append(filtered, index)
 			}
 		}
