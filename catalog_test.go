@@ -27,11 +27,21 @@ func TestScanSongsNested(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var got []string
-	scanSongs(root, func(path string) { got = append(got, path) },
-		func(path string, err error) { t.Errorf("scan %s: %v", path, err) })
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("paths = %v, want %v", got, want)
+	for _, tc := range []struct {
+		extension string
+		want      []string
+	}{
+		{"", want},
+		{".emk", want[:1]},
+		{".smd", want[1:]},
+		{".kar", nil},
+	} {
+		var got []string
+		scanSongs(root, tc.extension, func(path string) { got = append(got, path) },
+			func(path string, err error) { t.Errorf("scan %s: %v", path, err) })
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("scan %q = %v, want %v", tc.extension, got, tc.want)
+		}
 	}
 }
 

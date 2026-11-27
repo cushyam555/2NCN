@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -85,22 +86,20 @@ func songInfo(path string) (song, error) {
 	return entry, nil
 }
 
+var songExtensions = [...]string{".emk", ".smd", ".hnk", ".sib", ".kar"}
+
 func supportedSongPath(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".emk", ".smd", ".hnk", ".sib", ".kar":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(songExtensions[:], strings.ToLower(filepath.Ext(path)))
 }
 
-func scanSongs(folder string, visit func(string), failed func(string, error)) {
+func scanSongs(folder, extension string, visit func(string), failed func(string, error)) {
 	filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			failed(path, err)
 			return nil
 		}
-		if entry.Type().IsRegular() && supportedSongPath(path) {
+		if entry.Type().IsRegular() && supportedSongPath(path) &&
+			(extension == "" || strings.EqualFold(filepath.Ext(path), extension)) {
 			visit(path)
 		}
 		return nil

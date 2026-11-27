@@ -118,6 +118,7 @@ type catalogWindow struct {
 	totalTasks                                    int
 	scanIssues, conversionIssues                  []scanIssue
 	statusFilter, statusLabel                     uintptr
+	scanType, scanTypeLabel                       uintptr
 	filter                                        songStatus
 	sortColumn, sortOrder                         int
 	reportButton                                  uintptr
@@ -150,6 +151,8 @@ func (w *catalogWindow) layout(width, height int) {
 	moveWindow.Call(w.codeHint, 416, 94, uintptr(max(width-428, 0)), 26, 1)
 	moveWindow.Call(w.statusLabel, 12, 132, 65, 26, 1)
 	moveWindow.Call(w.statusFilter, 80, 127, 185, 180, 1)
+	moveWindow.Call(w.scanTypeLabel, 285, 132, 170, 26, 1)
+	moveWindow.Call(w.scanType, 455, 127, 155, 200, 1)
 	moveWindow.Call(w.list, 12, 168, uintptr(width-24), uintptr(height-201), 1)
 	moveWindow.Call(w.status, 12, uintptr(height-25), uintptr(width-24), 22, 1)
 }
@@ -165,6 +168,7 @@ func (w *catalogWindow) setBusy(busy bool) {
 	enableWindow.Call(w.clear, enabled(!busy))
 	enableWindow.Call(w.startCode, enabled(!busy))
 	enableWindow.Call(w.statusFilter, enabled(!busy))
+	enableWindow.Call(w.scanType, enabled(!busy))
 	enableWindow.Call(w.reportButton, enabled(!busy && len(w.scanIssues)+len(w.conversionIssues) > 0))
 	w.updateActions(busy)
 }
@@ -232,7 +236,7 @@ func (w *catalogWindow) catalogStatus(scanning bool) {
 	w.statusText(text)
 }
 
-func (w *catalogWindow) load(paths []string, folder string) {
+func (w *catalogWindow) load(paths []string, folder, extension string) {
 	w.rows = nil
 	w.shown = nil
 	w.scanIssues, w.conversionIssues = nil, nil
@@ -262,7 +266,7 @@ func (w *catalogWindow) load(paths []string, folder string) {
 			updates <- update{entry: entry}
 		}
 		if folder != "" {
-			scanSongs(folder, visit, func(path string, err error) {
+			scanSongs(folder, extension, visit, func(path string, err error) {
 				issues = append(issues, scanIssue{operation: "สำรวจเส้นทาง", path: path, reason: err.Error()})
 			})
 		} else {
@@ -472,14 +476,21 @@ func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			if err != nil {
 				message(hwnd, err.Error(), 0x10)
 			} else if len(paths) > 0 {
-				ui.load(paths, "")
+				ui.load(paths, "", "")
 			}
 		case idFolder:
-			folder, err := selectFolder(hwnd, "เลือกโฟลเดอร์เพลง EMK / SMD / HNK / SIB / KAR")
+			extension := ""
+			title := "เลือกโฟลเดอร์เพลงทุกชนิดที่รองรับ"
+			selected, _, _ := sendMessage.Call(ui.scanType, 0x147, 0, 0) // CB_GETCURSEL
+			if selected >= 1 && selected <= uintptr(len(songExtensions)) {
+				extension = songExtensions[selected-1]
+				title = "เลือกโฟลเดอร์เพลง " + strings.ToUpper(extension)
+			}
+			folder, err := selectFolder(hwnd, title)
 			if err != nil {
 				message(hwnd, err.Error(), 0x10)
 			} else if folder != "" {
-				ui.load(nil, folder)
+				ui.load(nil, folder, extension)
 			}
 		case idSearch:
 			if uint16(wParam>>16) == 0x300 && ui.search != 0 { // EN_CHANGE
@@ -594,10 +605,12 @@ func main() {
 	ui.list = makeControl(handle, "SysListView32", "", 0x81001, 104, instance)
 	ui.statusLabel = makeControl(handle, "STATIC", "สถานะ", 0, 116, instance)
 	ui.statusFilter = makeControl(handle, "COMBOBOX", "", 0x210003, idStatusFilter, instance)
+	ui.scanTypeLabel = makeControl(handle, "STATIC", "ชนิดไฟล์สำหรับสแกน", 0, 117, instance)
+	ui.scanType = makeControl(handle, "COMBOBOX", "", 0x210003, 118, instance)
 	ui.reportButton = makeControl(handle, "BUTTON", "รายงานปัญหา", 0x10000, idScanReport, instance)
 	ui.status = makeControl(handle, "STATIC", "", 0, 105, instance)
 	widgets := []uintptr{ui.files, ui.folder, ui.selected, ui.visible, ui.convert,
-		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status, ui.reportButton, ui.statusLabel, ui.statusFilter}
+		ui.searchLabel, ui.search, ui.clear, ui.codeLabel, ui.startCode, ui.codeHint, ui.list, ui.status, ui.reportButton, ui.statusLabel, ui.statusFilter, ui.scanTypeLabel, ui.scanType}
 	for _, control := range widgets {
 		if control == 0 {
 			message(handle, "เปิดส่วนแสดงรายการเพลงไม่ได้", 0x10)
@@ -608,6 +621,12 @@ func main() {
 		sendMessage.Call(ui.statusFilter, 0x143, 0, uintptr(unsafe.Pointer(wide(label)))) // CB_ADDSTRING
 	}
 	sendMessage.Call(ui.statusFilter, 0x14e, 0, 0)
+	sendMessage.Call(ui.scanType, 0x143, 0, uintptr(unsafe.Pointer(wide("ทุกชนิด"))))
+	for _, ext := range songExtensions {
+		label := strings.ToUpper(strings.TrimPrefix(ext, "."))
+		sendMessage.Call(ui.scanType, 0x143, 0, uintptr(unsafe.Pointer(wide(label))))
+	}
+	sendMessage.Call(ui.scanType, 0x14e, 0, 0)
 	sendMessage.Call(ui.startCode, 0xc5, 64, 0)
 	sendMessage.Call(ui.search, 0xc5, 1024, 0) // EM_SETLIMITTEXT
 
@@ -643,7 +662,7 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		if info, err := os.Stat(os.Args[1]); len(os.Args) == 2 && err == nil && info.IsDir() {
-			ui.load(nil, os.Args[1])
+			ui.load(nil, os.Args[1], "")
 		} else {
 			filtered := make([]string, 0, len(os.Args)-1)
 			for _, path := range os.Args[1:] {
@@ -652,7 +671,7 @@ func main() {
 				}
 			}
 			if len(filtered) > 0 {
-				ui.load(filtered, "")
+				ui.load(filtered, "", "")
 			}
 		}
 	}
