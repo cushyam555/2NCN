@@ -52,6 +52,13 @@ func validateMIDI(data []byte) error {
 	remaining := data[8+int(headerSize):]
 	for track := 1; track <= tracks; {
 		if len(remaining) < 8 {
+			// Some format-1 files declare one extra track. Only correct the
+			// header when all physical tracks passed validation and the last
+			// track ends exactly at EOF.
+			if len(remaining) == 0 && format == 1 && track == tracks && track > 1 {
+				binary.BigEndian.PutUint16(data[10:12], uint16(track-1))
+				return nil
+			}
 			return fmt.Errorf("ข้อมูล MIDI ขาดก่อนแทร็ก %d จาก %d", track, tracks)
 		}
 		size := binary.BigEndian.Uint32(remaining[4:8])

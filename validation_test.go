@@ -45,3 +45,22 @@ func TestCatalogViewPreservesRowIndices(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateMIDIRepairsOneExtraDeclaredTrack(t *testing.T) {
+	midi := []byte("MThd\x00\x00\x00\x06\x00\x01\x00\x03\x00\x60MTrk\x00\x00\x00\x04\x00\xff\x2f\x00MTrk\x00\x00\x00\x04\x00\xff\x2f\x00")
+	for name, invalid := range map[string][]byte{
+		"partial next header": append(bytes.Clone(midi), 'M'),
+		"partial last track":  midi[:len(midi)-1],
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateMIDI(invalid); err == nil || invalid[11] != 3 {
+				t.Fatalf("expected rejection without changing the track count, got %v and count %d", err, invalid[11])
+			}
+		})
+	}
+	want := bytes.Clone(midi)
+	want[11] = 2
+	if err := validateMIDI(midi); err != nil || !bytes.Equal(midi, want) {
+		t.Fatalf("expected only the track count to change, got %x and %v", midi, err)
+	}
+}
